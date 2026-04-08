@@ -1,0 +1,354 @@
+/* ══════════════════════════
+   AI COPILOT PAGE
+══════════════════════════ */
+#aico-page {
+  display: flex;
+  min-height: 100vh;
+  background: #f3f4f6;
+}
+
+.aico-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 28px 28px;
+  min-height: 0;
+}
+
+/* ── Tabs ── */
+.aico-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 20px;
+}
+
+.aico-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.aico-tab:hover { color: #374151; }
+.aico-tab.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+}
+.aico-tab svg { flex-shrink: 0; }
+
+/* ── Body layout ── */
+.aico-body {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Chat column ── */
+.aico-chat-col {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.aico-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 24px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: 420px;
+  max-height: 520px;
+}
+
+/* ── Message rows ── */
+.aico-msg-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.aico-msg-row.user {
+  flex-direction: row-reverse;
+}
+
+/* AI avatar */
+.aico-ai-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c3aed, #a78bfa);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* User avatar */
+.aico-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.aico-msg-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 80%;
+}
+.aico-msg-row.user .aico-msg-content {
+  align-items: flex-end;
+}
+
+/* Bubbles */
+.aico-bubble {
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #111827;
+}
+.aico-bubble.ai {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 2px 12px 12px 12px;
+}
+.aico-bubble.user {
+  background: #2563eb;
+  color: #fff;
+  border-radius: 12px 2px 12px 12px;
+}
+
+.aico-time {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 0 2px;
+}
+
+/* ── Result cards ── */
+.aico-cards {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.aico-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.aico-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 2px;
+}
+.aico-card-detail {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Badges */
+.aico-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.badge-red    { background: #fef2f2; color: #dc2626; }
+.badge-orange { background: #fff7ed; color: #ea580c; }
+.badge-green  { background: #f0fdf4; color: #16a34a; }
+
+/* ── Action buttons ── */
+.aico-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.aico-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  transition: background 0.12s, border-color 0.12s;
+}
+.aico-action-btn:hover { background: #f3f4f6; }
+.aico-action-btn.primary {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.aico-action-btn.primary:hover { background: #1d4ed8; }
+
+/* ── Input area ── */
+.aico-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid #f3f4f6;
+}
+.aico-input {
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: #111827;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.15s;
+}
+.aico-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.aico-input::placeholder { color: #9ca3af; }
+
+.aico-send {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #2563eb;
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s;
+}
+.aico-send:hover:not(:disabled) { background: #1d4ed8; }
+.aico-send:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.aico-input-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 12px;
+}
+.aico-hint-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  font-size: 12.5px;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0;
+}
+.aico-hint-btn:hover { color: #374151; }
+.aico-hint-enter {
+  margin-left: auto;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* ── Right column ── */
+.aico-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aico-panel {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 18px;
+}
+.aico-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 12px;
+}
+
+/* Suggested questions */
+.aico-suggest {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  line-height: 1.4;
+}
+.aico-suggest:last-child { margin-bottom: 0; }
+.aico-suggest:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+
+/* Active context */
+.aico-ctx-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+.aico-ctx-row:last-of-type { border-bottom: none; }
+.aico-ctx-label { color: #6b7280; }
+.aico-ctx-value { font-weight: 600; color: #111827; font-size: 12.5px; }
+
+.aico-ctx-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.aico-ctx-btn:hover { background: #f3f4f6; }
