@@ -521,6 +521,73 @@ function QuoteDetailModal({ quote, onClose, onSend, onConvert, onDiscount, onAcc
   );
 }
 
+/* ─── Order Detail Modal ─── */
+function OrderDetailModal({ order, onClose, refQuoteNum }) {
+  const meta = ORDER_STATUS_META[order.status] ?? ORDER_STATUS_META.confirmed;
+  const sym = CURRENCY_SYM[order.currency] ?? '';
+  const created = new Date(order.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+  return (
+    <Modal title={`${order.order_number} — Details`} onClose={onClose} width={620}>
+      <div className="pur-detail-row">
+        <span>Status</span>
+        <span style={{background:meta.bg,color:meta.color,fontSize:'12px',fontWeight:600,padding:'2px 10px',borderRadius:'12px'}}>{meta.label}</span>
+      </div>
+      {refQuoteNum && (
+        <div className="pur-detail-row"><span>Quotation Ref</span><strong>{refQuoteNum}</strong></div>
+      )}
+      <div className="pur-detail-row"><span>Date</span><strong>{created}</strong></div>
+
+      <div style={{marginTop:'14px',marginBottom:'8px',fontSize:'12px',fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'0.05em'}}>Customer</div>
+      <div className="pur-detail-row"><span>Company</span><strong>{order.customer_name || '—'}</strong></div>
+      {order.department    && <div className="pur-detail-row"><span>Department</span><strong>{order.department}</strong></div>}
+      {order.contact_person && <div className="pur-detail-row"><span>Contact</span><strong>{order.contact_person}</strong></div>}
+      {order.phone         && <div className="pur-detail-row"><span>Phone</span><strong>{order.phone}</strong></div>}
+      {order.email         && <div className="pur-detail-row"><span>Email</span><strong>{order.email}</strong></div>}
+
+      {order.items && order.items.length > 0 && (
+        <>
+          <div style={{marginTop:'14px',marginBottom:'8px',fontSize:'12px',fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'0.05em'}}>Line Items</div>
+          <div style={{overflowX:'auto',marginBottom:'8px'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
+              <thead>
+                <tr style={{background:'#f9fafb',borderBottom:'1px solid #e5e7eb'}}>
+                  {['#','Item','Qty','Unit','Unit Price','Total'].map(h => (
+                    <th key={h} style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:'#6b7280',whiteSpace:'nowrap'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {order.items.map(item => (
+                  <tr key={item.id || item.line_no} style={{borderBottom:'1px solid #f3f4f6'}}>
+                    <td style={{padding:'7px 10px',color:'#6b7280'}}>{item.line_no}</td>
+                    <td style={{padding:'7px 10px',color:'#111827',fontWeight:500}}>{item.item_name}</td>
+                    <td style={{padding:'7px 10px',color:'#374151'}}>{item.qty}</td>
+                    <td style={{padding:'7px 10px',color:'#374151'}}>{item.unit}</td>
+                    <td style={{padding:'7px 10px',color:'#374151'}}>{sym}{fmt(item.unit_price)}</td>
+                    <td style={{padding:'7px 10px',color:'#111827',fontWeight:600}}>{sym}{fmt(item.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:'12px'}}>
+        <div style={{minWidth:'220px'}}>
+          <div className="pur-detail-row" style={{borderBottom:'1px solid #f3f4f6',paddingBottom:'6px'}}><span>Subtotal</span><strong>{sym}{fmt(order.subtotal)}</strong></div>
+          <div className="pur-detail-row" style={{borderBottom:'1px solid #f3f4f6',padding:'6px 0'}}><span>VAT (15%)</span><strong>{sym}{fmt(order.vat)}</strong></div>
+          <div className="pur-detail-row" style={{paddingTop:'6px'}}><span style={{fontWeight:700,color:'#111827'}}>Total</span><strong style={{fontSize:'15px',color:'#111827'}}>{sym}{fmt(order.total)}</strong></div>
+        </div>
+      </div>
+
+      <div className="pur-modal-actions" style={{marginTop:'20px'}}>
+        <button className="pur-btn-cancel" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ─── KPI Drawer ─── */
 const KPI_DETAILS = {
   revenue:    { title:'Revenue Breakdown',     rows:[{label:'Software',value:'$1.8M',color:'#3b82f6'},{label:'Services',value:'$1.2M',color:'#10b981'},{label:'Custom Dev',value:'$1.2M',color:'#7c3aed'}], note:'18% growth vs last month.' },
@@ -546,6 +613,13 @@ const STATUS_META = {
   accepted:  { label:'Accepted',  bg:'#dcfce7', color:'#15803d' },
   rejected:  { label:'Rejected',  bg:'#fee2e2', color:'#b91c1c' },
   converted: { label:'Converted', bg:'#f5f3ff', color:'#7c3aed' },
+};
+
+const ORDER_STATUS_META = {
+  confirmed:   { label:'Confirmed',   bg:'#dbeafe', color:'#1d4ed8' },
+  in_progress: { label:'In Progress', bg:'#ffedd5', color:'#c2410c' },
+  delivered:   { label:'Delivered',   bg:'#dcfce7', color:'#15803d' },
+  cancelled:   { label:'Cancelled',   bg:'#fee2e2', color:'#b91c1c' },
 };
 
 function normalizeApiQuote(q) {
@@ -578,6 +652,7 @@ const FUNNEL     = [
 export default function Sales({ goPage, onLogout }) {
   const [builderOpen, setBuilderOpen]       = useState(false);
   const builderRef                          = useRef(null);
+  const quotationsRef                       = useRef(null);
   const [quotes, setQuotes]                 = useState([]);
   const [statusFilter, setStatusFilter]     = useState('all');
   const [search, setSearch]                 = useState('');
@@ -588,6 +663,10 @@ export default function Sales({ goPage, onLogout }) {
   const [totalRevenue, setTotalRevenue]     = useState(null);
   const [activeQuotes, setActiveQuotes]     = useState(null);
   const [conversionRate, setConversionRate] = useState(null);
+  const [topProducts, setTopProducts]       = useState(null);
+  const [activeTab, setActiveTab]           = useState('quotations');
+  const [orders, setOrders]                 = useState([]);
+  const [orderDetail, setOrderDetail]       = useState(null);
   const [tasks, setTasks]                   = useState([
     { id:1, text:'Follow up with Enterprise Corp', due:'Today 3:00 PM',     done:false, color:'#fffbeb', border:'#fde68a' },
     { id:2, text:'Prepare demo for RetailChain',   due:'Tomorrow 10:00 AM', done:false, color:'#eff6ff', border:'#bfdbfe' },
@@ -636,13 +715,28 @@ export default function Sales({ goPage, onLogout }) {
           setTotalRevenue(data.total_revenue);
           setActiveQuotes(data.active_quotes);
           setConversionRate(data.conversion_rate);
+          setTopProducts(data.top_products ?? []);
         }
       })
+      .catch(() => {});
+
+    fetch('/api/v1/sales/orders', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => {
+        if (r.status === 401) { handleAuthError(); return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then(data => { if (data?.items) setOrders(data.items); })
       .catch(() => {});
   }, []);
 
   function addQuote(q) {
     setQuotes(p => [q, ...p]);
+  }
+
+  function addOrder(o) {
+    setOrders(p => [o, ...p]);
   }
 
   function replaceQuote(updated) {
@@ -685,7 +779,9 @@ export default function Sales({ goPage, onLogout }) {
       if (res.ok) {
         const order = await res.json();
         replaceQuote({ ...quote, _apiStatus:'converted', status:'Converted', statusBg:'#f5f3ff', statusColor:'#7c3aed' });
-        showToast(`Sales Order ${order.order_number} created`);
+        addOrder(order);
+        setActiveTab('orders');
+        showToast('Order created');
       } else {
         const err = await res.json().catch(() => ({}));
         showToast(err.detail || 'Conversion failed');
@@ -738,6 +834,13 @@ export default function Sales({ goPage, onLogout }) {
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
 
       {discountQuote && <ApplyDiscountModal quote={discountQuote} onClose={() => setDiscountQuote(null)} onSave={showToast} />}
+      {orderDetail   && (
+        <OrderDetailModal
+          order={orderDetail}
+          onClose={() => setOrderDetail(null)}
+          refQuoteNum={quotes.find(q => q.id === orderDetail.quotation_id)?.num}
+        />
+      )}
       {quoteDetail   && <QuoteDetailModal
         quote={quoteDetail}
         onClose={() => setQuoteDetail(null)}
@@ -792,7 +895,29 @@ export default function Sales({ goPage, onLogout }) {
             ))}
           </div>
 
-          <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:'18px',alignItems:'start'}}>
+          {/* Tabs */}
+          <div style={{display:'flex',gap:'2px',marginBottom:'16px',background:'#f3f4f6',borderRadius:'10px',padding:'3px',width:'fit-content'}}>
+            {[
+              { key:'quotations', label:'Quotations' },
+              { key:'orders',     label:'Orders' },
+            ].map(tab => (
+              <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+                padding:'6px 22px', borderRadius:'8px', border:'none', cursor:'pointer',
+                fontSize:'13.5px', fontWeight: activeTab===tab.key ? 700 : 500,
+                background: activeTab===tab.key ? '#fff' : 'transparent',
+                color:      activeTab===tab.key ? '#111827' : '#6b7280',
+                boxShadow:  activeTab===tab.key ? '0 1px 3px rgba(0,0,0,.1)' : 'none',
+                transition: 'all .15s',
+              }}>
+                {tab.label}
+                {tab.key === 'orders' && orders.length > 0 && (
+                  <span style={{marginLeft:'6px',background:'#2563eb',color:'#fff',fontSize:'11px',fontWeight:700,padding:'1px 6px',borderRadius:'10px'}}>{orders.length}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'quotations' ? (<div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:'18px',alignItems:'start'}}>
             {/* Left column */}
             <div>
               {/* Sales Funnel */}
@@ -808,8 +933,63 @@ export default function Sales({ goPage, onLogout }) {
                 ))}
               </div>
 
+              {/* ── Orders Tab ── */}
+              {activeTab === 'orders' && (
+                <div className="pur-tab-card" style={{overflow:'hidden',padding:0}}>
+                  <div style={{padding:'20px 22px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                    <span style={{fontSize:'15px',fontWeight:700,color:'#111827'}}>Sales Orders</span>
+                    <span style={{fontSize:'12px',color:'#9ca3af'}}>{orders.length} order{orders.length!==1?'s':''}</span>
+                  </div>
+                  {orders.length === 0 ? (
+                    <div style={{padding:'32px',textAlign:'center',color:'#9ca3af',fontSize:'13.5px'}}>
+                      No orders yet. Convert an accepted quotation to create one.
+                    </div>
+                  ) : (
+                    <div style={{overflowX:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse'}}>
+                        <thead>
+                          <tr style={{background:'#f9fafb',borderBottom:'1px solid #e5e7eb'}}>
+                            {['Order No','Company','Amount','Status','Date','Actions'].map(h => (
+                              <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:'12px',fontWeight:600,color:'#6b7280',whiteSpace:'nowrap'}}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {orders.map(o => {
+                            const oMeta = ORDER_STATUS_META[o.status] ?? ORDER_STATUS_META.confirmed;
+                            const sym   = CURRENCY_SYM[o.currency] ?? '';
+                            const oDate = new Date(o.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+                            return (
+                              <tr key={o.id} style={{borderBottom:'1px solid #f3f4f6',transition:'background .1s',cursor:'default'}}
+                                onMouseEnter={e=>e.currentTarget.style.background='#fafafa'}
+                                onMouseLeave={e=>e.currentTarget.style.background=''}>
+                                <td style={{padding:'12px 16px',fontSize:'13px',fontWeight:700,color:'#111827',whiteSpace:'nowrap'}}>{o.order_number}</td>
+                                <td style={{padding:'12px 16px',fontSize:'13px',color:'#374151'}}>{o.customer_name || '—'}</td>
+                                <td style={{padding:'12px 16px',fontSize:'13px',fontWeight:600,color:'#111827',whiteSpace:'nowrap'}}>{sym}{fmt(o.total)}</td>
+                                <td style={{padding:'12px 16px'}}>
+                                  <span style={{background:oMeta.bg,color:oMeta.color,fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'12px'}}>
+                                    {oMeta.label}
+                                  </span>
+                                </td>
+                                <td style={{padding:'12px 16px',fontSize:'12px',color:'#6b7280',whiteSpace:'nowrap'}}>{oDate}</td>
+                                <td style={{padding:'12px 16px'}}>
+                                  <button style={{fontSize:'12.5px',fontWeight:600,color:'#2563eb',background:'none',border:'none',cursor:'pointer',padding:0}}
+                                    onClick={() => setOrderDetail(o)}>
+                                    View Details
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* ── Collapsible Quotation Builder ── */}
-              <div ref={builderRef} className="sqb-collapse-card">
+              {activeTab === 'quotations' && <div ref={builderRef} className="sqb-collapse-card">
                 <div
                   className={`sqb-collapse-head${builderOpen ? ' open' : ''}`}
                   onClick={() => setBuilderOpen(p => !p)}
@@ -841,10 +1021,10 @@ export default function Sales({ goPage, onLogout }) {
                     />
                   </div>
                 )}
-              </div>
+              </div>}
 
               {/* Quotation list */}
-              <div className="pur-tab-card" style={{overflow:'hidden',padding:0}}>
+              <div ref={quotationsRef} className="pur-tab-card" style={{overflow:'hidden',padding:0}}>
                 <div style={{padding:'20px 22px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                   <span style={{fontSize:'15px',fontWeight:700,color:'#111827'}}>Recent Quotations</span>
                   <span style={{fontSize:'12px',color:'#9ca3af'}}>{filtered.length} of {quotes.length}</span>
@@ -932,29 +1112,48 @@ export default function Sales({ goPage, onLogout }) {
                 <button className="pur-sidebar-btn pur-sidebar-btn-blue" onClick={openBuilder}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New Quotation
                 </button>
-                <button className="pur-sidebar-btn pur-sidebar-btn-green" onClick={() => { const a = quotes.find(q => q._apiStatus==='accepted'); a ? convertToOrder(a) : showToast('No accepted quotes to convert'); }}>
+                <button
+                  className="pur-sidebar-btn pur-sidebar-btn-green"
+                  onClick={() => {
+                    setStatusFilter('accepted');
+                    setTimeout(() => quotationsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                  }}
+                >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Convert to Order
                 </button>
-                <button className="pur-sidebar-btn pur-sidebar-btn-outline" onClick={() => { const f = quotes.find(q=>q._apiStatus==='draft'); f ? setDiscountQuote(f) : showToast('No draft quotes available'); }}>
+                <button className="pur-sidebar-btn pur-sidebar-btn-outline" disabled style={{opacity:0.45,cursor:'not-allowed'}}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>Apply Discount
+                  <span style={{fontSize:'10px',fontWeight:500,color:'#9ca3af',marginLeft:'auto'}}>Soon</span>
                 </button>
               </div>
 
               <div className="pur-tab-card">
                 <div style={{fontSize:'14.5px',fontWeight:700,color:'#111827',marginBottom:'14px'}}>Top Products</div>
-                {[
-                  {label:'Software Licenses', sub:'Enterprise Solutions', val:'$245K', grow:'↗ 22%', color:'#dbeafe', ic:'#2563eb'},
-                  {label:'Marketing Services', sub:'Digital & Traditional', val:'$189K', grow:'↗ 18%', color:'#dcfce7', ic:'#16a34a'},
-                  {label:'Custom Development', sub:'Web & Mobile Apps',    val:'$156K', grow:'↗ 35%', color:'#f5f3ff', ic:'#7c3aed'},
-                ].map(p => (
-                  <div key={p.label} style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'12px'}}>
-                    <div style={{width:'34px',height:'34px',background:p.color,borderRadius:'8px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={p.ic} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                    </div>
-                    <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:600,color:'#111827'}}>{p.label}</div><div style={{fontSize:'12px',color:'#9ca3af'}}>{p.sub}</div></div>
-                    <div style={{textAlign:'right'}}><div style={{fontSize:'13px',fontWeight:700,color:'#111827'}}>{p.val}</div><div style={{fontSize:'12px',color:'#16a34a'}}>{p.grow}</div></div>
-                  </div>
-                ))}
+                {topProducts === null ? (
+                  <div style={{fontSize:'13px',color:'#9ca3af',textAlign:'center',padding:'12px 0'}}>Loading…</div>
+                ) : topProducts.length === 0 ? (
+                  <div style={{fontSize:'13px',color:'#9ca3af',textAlign:'center',padding:'12px 0'}}>No product data available</div>
+                ) : (
+                  topProducts.map((p, idx) => {
+                    const COLORS = [
+                      {bg:'#dbeafe', ic:'#2563eb'},
+                      {bg:'#dcfce7', ic:'#16a34a'},
+                      {bg:'#f5f3ff', ic:'#7c3aed'},
+                      {bg:'#fef9c3', ic:'#a16207'},
+                      {bg:'#ffe4e6', ic:'#be123c'},
+                    ];
+                    const c = COLORS[idx % COLORS.length];
+                    return (
+                      <div key={p.name} style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'12px'}}>
+                        <div style={{width:'34px',height:'34px',background:c.bg,borderRadius:'8px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c.ic} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                        </div>
+                        <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:600,color:'#111827'}}>{p.name}</div></div>
+                        <div style={{textAlign:'right'}}><div style={{fontSize:'13px',fontWeight:700,color:'#111827'}}>{fmtRevenue(p.revenue)}</div></div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
 
               {/* Discount Rules */}
@@ -1023,7 +1222,71 @@ export default function Sales({ goPage, onLogout }) {
                 )}
               </div>
             </div>
-          </div>
+          </div>) : (
+            <div className="pur-tab-card" style={{overflow:'hidden',padding:0}}>
+              <div style={{padding:'20px 22px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <span style={{fontSize:'15px',fontWeight:700,color:'#111827'}}>Sales Orders</span>
+                <span style={{fontSize:'12px',color:'#9ca3af'}}>{orders.length} order{orders.length!==1?'s':''}</span>
+              </div>
+              {orders.length === 0 ? (
+                <div style={{padding:'48px',textAlign:'center',color:'#9ca3af',fontSize:'13.5px'}}>
+                  No orders yet. Convert an accepted quotation to create your first order.
+                </div>
+              ) : (
+                <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead>
+                      <tr style={{background:'#f9fafb',borderBottom:'2px solid #f3f4f6'}}>
+                        <th style={{padding:'11px 22px',textAlign:'left',fontSize:'12px',fontWeight:600,color:'#6b7280',whiteSpace:'nowrap'}}>Order No</th>
+                        <th style={{padding:'11px 16px',textAlign:'left',fontSize:'12px',fontWeight:600,color:'#6b7280'}}>Company</th>
+                        <th style={{padding:'11px 16px',textAlign:'right',fontSize:'12px',fontWeight:600,color:'#6b7280'}}>Amount</th>
+                        <th style={{padding:'11px 16px',textAlign:'left',fontSize:'12px',fontWeight:600,color:'#6b7280'}}>Status</th>
+                        <th style={{padding:'11px 16px',textAlign:'left',fontSize:'12px',fontWeight:600,color:'#6b7280',whiteSpace:'nowrap'}}>Date</th>
+                        <th style={{padding:'11px 22px',textAlign:'right',fontSize:'12px',fontWeight:600,color:'#6b7280'}}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orders.map(o => {
+                        const statusMeta = ORDER_STATUS_META[o.status] ?? {label:o.status,bg:'#f3f4f6',color:'#374151'};
+                        const sym = CURRENCY_SYM[o.currency] ?? '';
+                        const total = `${sym}${Number(o.total).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+                        const date = new Date(o.created_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+                        return (
+                          <tr key={o.id} style={{borderBottom:'1px solid #f9fafb',transition:'background .1s'}}
+                            onMouseEnter={e=>e.currentTarget.style.background='#fafafa'}
+                            onMouseLeave={e=>e.currentTarget.style.background=''}>
+                            <td style={{padding:'14px 22px'}}>
+                              <span style={{fontSize:'13.5px',fontWeight:700,color:'#111827',fontFamily:'monospace'}}>{o.order_number}</span>
+                            </td>
+                            <td style={{padding:'14px 16px'}}>
+                              <div style={{fontSize:'13px',fontWeight:600,color:'#111827'}}>{o.customer_name||'—'}</div>
+                              {o.subject && <div style={{fontSize:'12px',color:'#9ca3af',marginTop:'2px'}}>{o.subject}</div>}
+                            </td>
+                            <td style={{padding:'14px 16px',textAlign:'right'}}>
+                              <span style={{fontSize:'13.5px',fontWeight:700,color:'#111827'}}>{total}</span>
+                            </td>
+                            <td style={{padding:'14px 16px'}}>
+                              <span style={{background:statusMeta.bg,color:statusMeta.color,fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'12px',whiteSpace:'nowrap'}}>{statusMeta.label}</span>
+                            </td>
+                            <td style={{padding:'14px 16px'}}>
+                              <span style={{fontSize:'12.5px',color:'#6b7280',whiteSpace:'nowrap'}}>{date}</span>
+                            </td>
+                            <td style={{padding:'14px 22px',textAlign:'right'}}>
+                              <button
+                                style={{fontSize:'12.5px',fontWeight:600,color:'#2563eb',background:'none',border:'none',cursor:'pointer',padding:0}}
+                                onClick={()=>setOrderDetail(o)}>
+                                View Details
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
