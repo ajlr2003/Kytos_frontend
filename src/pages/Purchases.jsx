@@ -30,12 +30,13 @@ function Modal({ title, onClose, width, children }) {
 }
 
 /* ─── API response → display shape ─── */
-const STATUS_BADGE = { DRAFT:'rb-pending', SENT:'rb-review', RECEIVED:'rb-review', EVALUATED:'rb-review', CLOSED:'rb-completed', CANCELLED:'rb-cancelled' };
+const STATUS_BADGE = { DRAFT:'rb-pending', SENT:'rb-review', RECEIVED:'rb-review', EVALUATED:'rb-review', AWARDED:'rb-completed', CLOSED:'rb-completed', CANCELLED:'rb-cancelled' };
 const STATUS_ACTION = {
   DRAFT:     { label:'Send RFQ',      cls:'blue' },
   SENT:      { label:'View Details',  cls:'blue' },
   RECEIVED:  { label:'Review Quotes', cls:'blue' },
-  EVALUATED: { label:'Create PO',     cls:'green' },
+  EVALUATED: { label:'Review Quotes', cls:'blue' },
+  AWARDED:   { label:'Create PO',     cls:'green' },
   CLOSED:    { label:'View Details',  cls:'blue' },
   CANCELLED: { label:'View Details',  cls:'blue' },
 };
@@ -56,65 +57,188 @@ function mapApiRFQ(r) {
   };
 }
 
-/* ─── Create PO Modal ─── */
-function CreatePOModal({ onClose, onSave, prefill }) {
-  const [form, setForm] = useState({
-    supplier: prefill?.supplier || '', item: prefill?.item || '', qty: '', price: '', delivery: '', notes: ''
-  });
-  const [saved, setSaved] = useState(false);
-  function save() {
-    if (!form.supplier || !form.item) return;
-    setSaved(true);
-    setTimeout(() => { onSave(`PO created for ${form.supplier}`); onClose(); }, 900);
+/* ─── Create GRN Modal ─── */
+function CreateGRNModal({ onClose, onSuccess }) {
+  const [poList,           setPoList]           = useState([]);
+  const [poLoading,        setPoLoading]        = useState(true);
+  const [poError,          setPoError]          = useState('');
+  const [poId,             setPoId]             = useState('');
+  const [poDetails,        setPoDetails]        = useState(null);
+  const [poDetailsLoading, setPoDetailsLoading] = useState(false);
+  const [qty,              setQty]              = useState('');
+  const [saving,           setSaving]           = useState(false);
+  const [error,            setError]            = useState('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) { setPoError('Not authenticated.'); setPoLoading(false); return; }
+    fetch('/api/v1/purchase-orders/', {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(res => res.ok ? res.json() : Promise.reject(`Failed to load POs (${res.status})`))
+      .then(data => {
+        const raw = data.items ?? (Array.isArray(data) ? data : data.results ?? []);
+        setPoList(raw.filter(po => po.status?.toLowerCase() !== 'completed'));
+      })
+      .catch(err => setPoError(String(err)))
+      .finally(() => setPoLoading(false));
+  }, []);
+
+  // Fetch PO details when a PO is selected to get quantity info
+  useEffect(() => {
+    if (!poId) { setPoDetails(null); return; }
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setPoDetailsLoading(true);
+    fetch(`/api/v1/purchase-orders/${poId}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(data => setPoDetails(data))
+      .catch(() => {
+        const found = poList.find(p => p.id === poId);
+        setPoDetails(found ?? null);
+      })
+      .finally(() => setPoDetailsLoading(false));
+  }, [poId, poList]);
+
+  const orderedQty   = Number(poDetails?.ordered_quantity ?? poDetails?.total_quantity ?? poDetails?.quantity ?? 0);
+  const receivedQty  = Number(poDetails?.received_quantity ?? 0);
+  const remainingQty = Math.max(0, orderedQty - receivedQty);
+  const progressPct  = orderedQty > 0 ? Math.min(100, Math.round((receivedQty / orderedQty) * 100)) : 0;
+
+  const qtyNum      = Number(qty);
+  const qtyTooHigh  = qty !== '' && orderedQty > 0 && qtyNum > remainingQty;
+  const qtyTooLow   = qty !== '' && qtyNum <= 0;
+  const qtyInvalid  = qtyTooHigh || qtyTooLow;
+  const qtyErrMsg   = qtyTooHigh
+    ? `Cannot exceed remaining quantity (${remainingQty})`
+    : qtyTooLow ? 'Quantity must be greater than 0' : '';
+
+  async function handleSubmit() {
+    if (!poId || !qty) { setError('PO and received quantity are required.'); return; }
+    if (qtyNum <= 0) { setError('Quantity must be greater than 0.'); return; }
+    if (orderedQty > 0 && qtyNum > remainingQty) { setError(`Cannot exceed remaining quantity (${remainingQty}).`); return; }
+    const token = localStorage.getItem('token');
+    if (!token) { setError('Not authenticated.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/v1/grn/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ po_id: poId, received_quantity: qtyNum }),
+      });
+      if (!res.ok) throw new Error(`Failed to create GRN (${res.status})`);
+      onSuccess();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
   }
-  const total = form.qty && form.price ? `$${(parseFloat(form.qty) * parseFloat(form.price)).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—';
+
+  return (
+    <Modal title="New Goods Receipt Note" onClose={onClose}>
+      <div className="pur-form-group">
+        <label>Purchase Order *</label>
+        {poError ? (
+          <div style={{ fontSize: '13px', color: '#b91c1c' }}>{poError}</div>
+        ) : (
+          <select value={poId} onChange={e => { setPoId(e.target.value); setQty(''); }} disabled={poLoading}>
+            <option value="">{poLoading ? 'Loading POs…' : 'Select PO…'}</option>
+            {poList.map(po => (
+              <option key={po.id} value={po.id}>
+                {po.id}{po.supplier_name ? ` — ${po.supplier_name}` : ''}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* Quantity summary for selected PO */}
+      {poId && (
+        <div style={{ margin: '0 0 14px', padding: '12px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+          {poDetailsLoading ? (
+            <div style={{ fontSize: '13px', color: '#9ca3af' }}>Loading PO details…</div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: orderedQty > 0 ? '10px' : 0 }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Ordered</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{orderedQty || '—'}</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Received</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: '#2563eb' }}>{receivedQty}</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: remainingQty > 0 ? '#d97706' : '#16a34a', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Remaining</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: remainingQty > 0 ? '#d97706' : '#16a34a' }}>{remainingQty}</div>
+                </div>
+              </div>
+              {orderedQty > 0 && (
+                <div>
+                  <div style={{ height: '6px', background: '#e5e7eb', borderRadius: '99px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${progressPct}%`, background: remainingQty === 0 ? '#16a34a' : '#3b82f6', borderRadius: '99px', transition: 'width 0.3s' }} />
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px', textAlign: 'right' }}>{progressPct}% received</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="pur-form-group">
+        <label>Received Quantity *</label>
+        <input
+          type="number"
+          min="1"
+          max={remainingQty > 0 ? remainingQty : undefined}
+          placeholder="0"
+          value={qty}
+          onChange={e => setQty(e.target.value)}
+          style={{ borderColor: qtyInvalid ? '#ef4444' : undefined }}
+        />
+        {qtyErrMsg && (
+          <div style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px' }}>{qtyErrMsg}</div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#b91c1c', fontSize: '13px', marginBottom: '8px' }}>{error}</div>
+      )}
+      <div className="pur-modal-actions">
+        <button className="pur-btn-cancel" onClick={onClose}>Cancel</button>
+        <button
+          className="pur-btn-primary"
+          onClick={handleSubmit}
+          disabled={saving || poLoading || !poId || !qty || qtyInvalid}
+        >
+          {saving ? 'Creating…' : 'Create GRN'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─── Create PO Modal ─── */
+function CreatePOModal({ onClose }) {
   return (
     <Modal title="Create Purchase Order" onClose={onClose}>
-      {saved ? (
-        <div className="pur-success">
-          <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          <div>Purchase Order created!</div>
-        </div>
-      ) : (
-        <>
-          <div className="pur-form-group">
-            <label>Supplier *</label>
-            <select value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })}>
-              <option value="">Select supplier…</option>
-              <option>TechSupply Co.</option><option>GlobalPrint Inc.</option><option>OfficePlus Ltd.</option><option>DataTech Systems</option>
-            </select>
-          </div>
-          <div className="pur-form-group">
-            <label>Item / Description *</label>
-            <input type="text" placeholder="e.g. Laptops x 10 units" value={form.item} onChange={e => setForm({ ...form, item: e.target.value })}/>
-          </div>
-          <div className="pur-form-grid">
-            <div className="pur-form-group">
-              <label>Quantity</label>
-              <input type="number" placeholder="0" value={form.qty} onChange={e => setForm({ ...form, qty: e.target.value })}/>
-            </div>
-            <div className="pur-form-group">
-              <label>Unit Price (USD)</label>
-              <input type="number" placeholder="0.00" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })}/>
-            </div>
-          </div>
-          {form.qty && form.price && (
-            <div className="pur-total-row">Total: <strong>{total}</strong></div>
-          )}
-          <div className="pur-form-group">
-            <label>Expected Delivery</label>
-            <input type="date" value={form.delivery} onChange={e => setForm({ ...form, delivery: e.target.value })}/>
-          </div>
-          <div className="pur-form-group">
-            <label>Notes</label>
-            <input type="text" placeholder="Special instructions…" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })}/>
-          </div>
-          <div className="pur-modal-actions">
-            <button className="pur-btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="pur-btn-primary" onClick={save}>Create PO</button>
-          </div>
-        </>
-      )}
+      <div style={{ padding: '8px 0 16px', fontSize: '13.5px', color: '#374151', lineHeight: '1.6' }}>
+        Purchase Orders can only be created from an awarded RFQ.
+        <ol style={{ marginTop: '12px', paddingLeft: '18px', color: '#6b7280', fontSize: '13px' }}>
+          <li>Go to the <strong>RFQs</strong> tab</li>
+          <li>Open an RFQ with status <strong>Awarded</strong></li>
+          <li>Click <strong>Create PO</strong> inside the RFQ detail</li>
+        </ol>
+      </div>
+      <div className="pur-modal-actions">
+        <button className="pur-btn-cancel" onClick={onClose}>Close</button>
+      </div>
     </Modal>
   );
 }
@@ -335,7 +459,7 @@ function CreateRFQModal({ onClose, onSuccess }) {
 }
 
 /* ─── RFQ Detail Modal ─── */
-function RFQDetailModal({ rfq, onClose, onSend }) {
+function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated }) {
   const [detail,      setDetail]      = useState(null);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState('');
@@ -348,9 +472,30 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
   const [selectedSupplierName, setSelectedSupplierName] = useState('');
   const [selectingId,          setSelectingId]          = useState(null); // tracks in-flight request
   const [selectError,          setSelectError]          = useState('');
+  const [autoSelecting,        setAutoSelecting]        = useState(false);
   const [creatingPO,   setCreatingPO]   = useState(false);
-  const [poCreated,    setPoCreated]    = useState(!!rfq.has_po);
+  const [poCreated,    setPoCreated]    = useState(false);
   const [poError,      setPoError]      = useState('');
+
+  // Reset all session state whenever a different RFQ is opened
+  useEffect(() => {
+    setDetail(null);
+    setLoading(true);
+    setError('');
+    setSending(false);
+    setLocalStatus(null);
+    setSendSuccess(false);
+    setQuotations([]);
+    setQuotationsLoading(true);
+    setSelectedSupplierId(null);
+    setSelectedSupplierName('');
+    setSelectingId(null);
+    setSelectError('');
+    setAutoSelecting(false);
+    setCreatingPO(false);
+    setPoCreated(false);
+    setPoError('');
+  }, [rfq.id]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -367,9 +512,28 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
       .then(data => {
         console.log('RFQ DETAILS:', data);
         setDetail(data);
+        if (data.has_po) setPoCreated(true);
+        if (data.selected_supplier_id) {
+          setSelectedSupplierId(data.selected_supplier_id);
+          if (data.status?.toUpperCase() === 'AWARDED') setLocalStatus('AWARDED');
+        }
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
+
+    // Check if PO already exists for this RFQ
+    fetch(`/api/v1/purchase-orders/?rfq_id=${rfq.id}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!data) return;
+        const results = Array.isArray(data) ? data : data.items ?? data.results ?? [];
+        // Verify at least one PO actually belongs to this RFQ (guards against backend ignoring query param)
+        const hasMatchingPO = results.some(po => po.rfq_id === rfq.id);
+        if (hasMatchingPO) setPoCreated(true);
+      })
+      .catch(() => {});
 
     // Fetch quotations
     fetch(`/api/v1/rfqs/${rfq.id}/quotations`, {
@@ -379,6 +543,14 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
       .then(data => {
         const raw = Array.isArray(data) ? data : data.items ?? data.results ?? [];
         setQuotations(raw);
+        // Resolve selected supplier name once quotations are available
+        setSelectedSupplierId(prev => {
+          if (prev) {
+            const match = raw.find(q => q.supplier?.id === prev);
+            if (match) setSelectedSupplierName(match.supplier?.company_name ?? 'Selected Supplier');
+          }
+          return prev;
+        });
       })
       .catch(() => setQuotations([]))
       .finally(() => setQuotationsLoading(false));
@@ -404,30 +576,28 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
     }
   }
 
-  async function handleSelectWinner(supplierId, supplierName) {
+  async function handleAutoSelect() {
     const token = localStorage.getItem('token');
-    const rfqId = rfq.id;
-    console.log('RFQ ID:', rfqId);
-    console.log('Supplier ID:', supplierId);
     if (!token) { setSelectError('Not authenticated.'); return; }
-    setSelectingId(supplierId);
+    setAutoSelecting(true);
     setSelectError('');
     try {
-      const res = await fetch(`/api/v1/rfqs/${rfqId}/select-supplier`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify({ supplier_id: supplierId }),
+      const res = await fetch(`/api/v1/rfqs/${rfq.id}/auto-select`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(`Failed to select supplier (${res.status})`);
-      setSelectedSupplierId(supplierId);
-      setSelectedSupplierName(supplierName);
+      if (!res.ok) throw new Error(`Auto-select failed (${res.status})`);
+      const data = await res.json();
+      const winnerId = data.selected_supplier_id;
+      const winnerQuote = quotations.find(q => q.supplier?.id === winnerId);
+      const winnerName = winnerQuote?.supplier?.company_name ?? 'Selected Supplier';
+      setSelectedSupplierId(winnerId);
+      setSelectedSupplierName(winnerName);
+      setLocalStatus('AWARDED');
     } catch (err) {
       setSelectError(err.message);
     } finally {
-      setSelectingId(null);
+      setAutoSelecting(false);
     }
   }
 
@@ -444,11 +614,12 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ rfq_id: rfq.id, supplier_id: selectedSupplierId }),
+        body: JSON.stringify({ rfq_id: rfq.id, supplier_id: selectedSupplierId ?? detail?.selected_supplier_id }),
       });
-      if (res.status === 409) { setPoCreated(true); return; }
+      if (res.status === 409) { setPoCreated(true); onPOCreated?.(); return; }
       if (!res.ok) throw new Error(`Failed to create PO (${res.status})`);
       setPoCreated(true);
+      onPOCreated?.();
     } catch (err) {
       setPoError(err.message);
     } finally {
@@ -498,10 +669,21 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
         </div>
 
         <div style={{ marginTop: '16px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Quotations</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Quotations</div>
+            {quotations.length > 0 && !selectedSupplierId && (
+              <button
+                onClick={handleAutoSelect}
+                disabled={autoSelecting}
+                style={{ fontSize: '12px', padding: '4px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: autoSelecting ? 'not-allowed' : 'pointer', opacity: autoSelecting ? 0.6 : 1, fontWeight: 600 }}
+              >
+                {autoSelecting ? 'Selecting…' : 'Auto Select Supplier'}
+              </button>
+            )}
+          </div>
           {selectedSupplierName && (
             <div style={{ marginBottom: '8px', padding: '8px 12px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', color: '#15803d', fontSize: '13px' }}>
-              Selected Supplier: <strong>{selectedSupplierName}</strong>
+              Auto Selected: <strong>{selectedSupplierName}</strong> — Lowest Price
             </div>
           )}
           {selectError && (
@@ -513,28 +695,18 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
             ) : quotations.length === 0 ? (
               <div style={{ padding: '10px 14px', fontSize: '13.5px', color: '#9ca3af' }}>No quotations yet</div>
             ) : quotations.map((q, i) => {
-              const supplierId   = q.supplier.id;
-              const supplierName = q.supplier.company_name ?? 'Unknown Supplier';
+              const supplierId   = q.supplier?.id;
+              const supplierName = q.supplier?.company_name ?? 'Unknown Supplier';
               const isSelected   = selectedSupplierId === supplierId;
-              const isInFlight   = selectingId === supplierId;
-              const isDisabled   = !!selectedSupplierId || isInFlight;
               return (
-                <div key={q.id ?? i} style={{ padding: '12px 14px', borderBottom: i < quotations.length - 1 ? '1px solid #f3f4f6' : 'none', fontSize: '13.5px' }}>
+                <div key={q.id ?? i} style={{ padding: '12px 14px', borderBottom: i < quotations.length - 1 ? '1px solid #f3f4f6' : 'none', fontSize: '13.5px', background: isSelected ? '#f0fdf4' : 'transparent' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                     <span style={{ fontWeight: 600, color: '#111827' }}>{supplierName}</span>
                     <span style={{ fontWeight: 700, color: '#2563eb' }}>${Number(q.price ?? q.total_price ?? 0).toLocaleString()}</span>
                   </div>
-                  {q.notes && <div style={{ fontSize: '12.5px', color: '#6b7280', marginBottom: '6px' }}>{q.notes}</div>}
-                  {isSelected ? (
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#15803d' }}>✓ Winner</span>
-                  ) : (
-                    <button
-                      onClick={() => handleSelectWinner(supplierId, supplierName)}
-                      disabled={isDisabled}
-                      style={{ fontSize: '12px', padding: '3px 10px', cursor: isDisabled ? 'not-allowed' : 'pointer', opacity: isDisabled ? 0.45 : 1 }}
-                    >
-                      {isInFlight ? 'Selecting…' : 'Select Winner'}
-                    </button>
+                  {q.notes && <div style={{ fontSize: '12.5px', color: '#6b7280', marginBottom: '4px' }}>{q.notes}</div>}
+                  {isSelected && (
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#15803d' }}>✓ Auto Selected (Lowest Price)</span>
                   )}
                 </div>
               );
@@ -582,13 +754,192 @@ function RFQDetailModal({ rfq, onClose, onSend }) {
         {currentStatus?.toLowerCase() === 'sent' && (
           <button className="pur-btn-primary" disabled style={{ opacity: 0.5, cursor: 'not-allowed' }}>Sent</button>
         )}
-        {currentStatus?.toLowerCase() === 'awarded' && (
-          <button className="pur-btn-primary" onClick={handleCreatePO} disabled={creatingPO || poCreated}>
-            {creatingPO ? 'Creating…' : poCreated ? 'PO Created' : 'Create PO'}
-          </button>
-        )}
+        {currentStatus?.toLowerCase() === 'awarded' && (() => {
+          const backendHasPO = purchaseOrders.some(po => po.rfq_id === rfq.id);
+          const poExists = backendHasPO || poCreated;
+          return poExists ? (
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#15803d', padding: '0 4px' }}>✓ PO Created</span>
+          ) : (
+            <button className="pur-btn-primary" onClick={handleCreatePO} disabled={creatingPO}>
+              {creatingPO ? 'Creating…' : 'Create PO'}
+            </button>
+          );
+        })()}
         {rfq.status === 'In Review' && <button className="pur-btn-primary" onClick={onClose}>Approve Quotes</button>}
         {rfq.status === 'Pending'   && <button className="pur-btn-primary" onClick={onClose}>Send Reminders</button>}
+      </div>
+    </Modal>
+  );
+}
+
+/* ─── PO Detail Modal ─── */
+function PODetailModal({ po, onClose }) {
+  const [detail,  setDetail]  = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) { setError('Not authenticated.'); setLoading(false); return; }
+    fetch(`/api/v1/purchase-orders/${po.id}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(res => res.ok ? res.json() : Promise.reject(`Failed to load PO (${res.status})`))
+      .then(data => setDetail(data))
+      .catch(err => { setError(String(err)); setDetail(po); })
+      .finally(() => setLoading(false));
+  }, [po.id]);
+
+  const src          = detail ?? po;
+  const orderedQty   = Number(src?.ordered_quantity ?? src?.total_quantity ?? src?.quantity ?? 0);
+  const receivedQty  = Number(src?.received_quantity ?? 0);
+  const remainingQty = Math.max(0, orderedQty - receivedQty);
+  const progressPct  = orderedQty > 0 ? Math.min(100, Math.round((receivedQty / orderedQty) * 100)) : 0;
+
+  const supplierName = src?.supplier_name ?? src?.supplier?.company_name ?? src?.supplier?.name ?? src?.supplier_id ?? '—';
+  const status       = src?.status ?? '—';
+
+  return (
+    <Modal title={`Purchase Order — ${po.id}`} onClose={onClose} width={520}>
+      {loading && <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '13.5px' }}>Loading…</div>}
+      {error && !detail && <div style={{ padding: '10px 12px', background: '#fef2f2', borderRadius: '8px', color: '#b91c1c', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
+
+      <div className="pur-detail-row"><span>PO ID</span><strong>{src?.id}</strong></div>
+      <div className="pur-detail-row"><span>Supplier</span><strong>{supplierName}</strong></div>
+      <div className="pur-detail-row"><span>RFQ ID</span><strong>{src?.rfq_id ?? '—'}</strong></div>
+      <div className="pur-detail-row">
+        <span>Status</span>
+        <span className={`pur-status-badge ${status.toLowerCase() === 'completed' ? 'po-delivered' : status.toLowerCase() === 'partial' ? 'po-pending' : 'po-approved'}`}>{status}</span>
+      </div>
+      <div className="pur-detail-row"><span>Created</span><strong>{src?.created_at ? new Date(src.created_at).toLocaleString() : '—'}</strong></div>
+
+      {/* Quantity tracking */}
+      <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px' }}>Quantity Tracking</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: orderedQty > 0 ? '12px' : 0 }}>
+          <div style={{ textAlign: 'center', padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Ordered</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#111827' }}>{orderedQty || '—'}</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Received</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#2563eb' }}>{receivedQty}</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: '10px', background: remainingQty === 0 ? '#f0fdf4' : '#fffbeb', borderRadius: '8px', border: `1px solid ${remainingQty === 0 ? '#bbf7d0' : '#fde68a'}` }}>
+            <div style={{ fontSize: '11px', color: remainingQty === 0 ? '#16a34a' : '#d97706', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>Remaining</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: remainingQty === 0 ? '#16a34a' : '#d97706' }}>{remainingQty}</div>
+          </div>
+        </div>
+        {orderedQty > 0 && (
+          <div>
+            <div style={{ height: '8px', background: '#e5e7eb', borderRadius: '99px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${progressPct}%`, background: remainingQty === 0 ? '#16a34a' : '#3b82f6', borderRadius: '99px', transition: 'width 0.3s' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#9ca3af', marginTop: '5px' }}>
+              <span>{progressPct}% received</span>
+              <span>{receivedQty} / {orderedQty} units</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="pur-modal-actions" style={{ marginTop: '20px' }}>
+        <button className="pur-btn-cancel" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ─── Invoice Detail Modal ─── */
+function InvoiceDetailModal({ invoice: initInvoice, onClose, onUpdated }) {
+  const [invoice,  setInvoice]  = useState(initInvoice);
+  const [actioning, setActioning] = useState('');
+  const [error,    setError]    = useState('');
+
+  async function callAction(action) {
+    const token = localStorage.getItem('token');
+    if (!token) { setError('Not authenticated.'); return; }
+    setActioning(action);
+    setError('');
+    try {
+      const res = await fetch(`/api/v1/purchase-invoices/${invoice.id}/${action}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Action failed (${res.status})`);
+      const updated = await res.json();
+      setInvoice(updated);
+      onUpdated?.(updated);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActioning('');
+    }
+  }
+
+  const status      = invoice.status?.toLowerCase() ?? 'draft';
+  const statusLabel = status === 'paid' ? 'Paid' : status === 'approved' ? 'Approved' : 'Draft';
+  const statusCls   = status === 'paid' ? 'rb-completed' : status === 'approved' ? 'rb-review' : 'rb-pending';
+  const supplierName = invoice.supplier_name ?? invoice.supplier?.company_name ?? '—';
+  const totalAmt    = Number(invoice.total_amount ?? invoice.amount ?? 0);
+  const unitPrice   = Number(invoice.unit_price ?? 0);
+  const receivedQty = invoice.received_quantity ?? invoice.quantity ?? '—';
+
+  return (
+    <Modal title={`Invoice — ${String(invoice.id).slice(0, 8)}…`} onClose={onClose} width={500}>
+      <div className="pur-detail-row">
+        <span>Status</span>
+        <span className={`pur-status-badge ${statusCls}`}>{statusLabel}</span>
+      </div>
+      <div className="pur-detail-row"><span>Supplier</span><strong>{supplierName}</strong></div>
+      <div className="pur-detail-row"><span>PO ID</span><strong style={{ fontSize:'12px', wordBreak:'break-all' }}>{invoice.po_id ?? '—'}</strong></div>
+      <div className="pur-detail-row"><span>GRN ID</span><strong style={{ fontSize:'12px', wordBreak:'break-all' }}>{invoice.grn_id ?? '—'}</strong></div>
+      <div className="pur-detail-row"><span>Date</span><strong>{invoice.created_at ? new Date(invoice.created_at).toLocaleDateString() : '—'}</strong></div>
+
+      <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px' }}>Billing Summary</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+          <div style={{ textAlign: 'center', padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '4px' }}>Qty Received</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#111827' }}>{receivedQty}</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ fontSize: '11px', color: '#2563eb', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '4px' }}>Unit Price</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#2563eb' }}>${unitPrice.toLocaleString()}</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: '10px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+            <div style={{ fontSize: '11px', color: '#15803d', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '4px' }}>Total Amount</div>
+            <div style={{ fontSize: '22px', fontWeight: 700, color: '#15803d' }}>${totalAmt.toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: '12px', padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#b91c1c', fontSize: '13px' }}>{error}</div>
+      )}
+
+      <div className="pur-modal-actions" style={{ marginTop: '20px' }}>
+        <button className="pur-btn-cancel" onClick={onClose}>Close</button>
+        {status === 'draft' && (
+          <button
+            className="pur-btn-primary"
+            onClick={() => callAction('approve')}
+            disabled={!!actioning}
+            style={{ background: '#2563eb' }}
+          >
+            {actioning === 'approve' ? 'Approving…' : 'Approve Invoice'}
+          </button>
+        )}
+        {status === 'approved' && (
+          <button
+            className="pur-btn-primary"
+            onClick={() => callAction('pay')}
+            disabled={!!actioning}
+            style={{ background: '#16a34a' }}
+          >
+            {actioning === 'pay' ? 'Processing…' : 'Mark as Paid'}
+          </button>
+        )}
       </div>
     </Modal>
   );
@@ -654,7 +1005,17 @@ export default function Purchases({ goPage }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [rfqs, setRfqs]             = useState([]);
   const [rfqsLoading, setRfqsLoading] = useState(true);
+  const [purchaseOrders, setPurchaseOrders]           = useState([]);
+  const [purchaseOrdersLoading, setPurchaseOrdersLoading] = useState(true);
+  const [grns, setGrns]             = useState([]);
+  const [grnsLoading, setGrnsLoading] = useState(true);
+  const [invoices, setInvoices]     = useState([]);
+  const [invoicesLoading, setInvoicesLoading] = useState(true);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [creatingInvoiceFor, setCreatingInvoiceFor] = useState(new Set());
   const [createPOPrefill, setCreatePOPrefill] = useState(null);
+  const [selectedPO, setSelectedPO] = useState(null);
+  const [showGRNModal, setShowGRNModal] = useState(false);
 
   const fetchRFQs = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -694,7 +1055,72 @@ export default function Purchases({ goPage }) {
     }
   }, []);
 
-  useEffect(() => { fetchRFQs(); }, [fetchRFQs]);
+  const fetchPurchaseOrders = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) { setPurchaseOrdersLoading(false); return; }
+    setPurchaseOrdersLoading(true);
+    try {
+      const res = await fetch('/api/v1/purchase-orders/', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
+      if (!res.ok) throw new Error(`PO fetch failed (${res.status})`);
+      const data = await res.json();
+      console.log('PO DATA:', data);
+      const raw = data.items ?? (Array.isArray(data) ? data : data.results ?? []);
+      console.log('Updated PO list:', raw);
+      setPurchaseOrders(raw);
+    } catch (err) {
+      console.error('Failed to fetch purchase orders:', err);
+      setPurchaseOrders([]);
+    } finally {
+      setPurchaseOrdersLoading(false);
+    }
+  }, []);
+
+  const fetchGRNs = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) { setGrnsLoading(false); return; }
+    setGrnsLoading(true);
+    try {
+      const res = await fetch('/api/v1/grn/', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
+      if (!res.ok) throw new Error(`GRN fetch failed (${res.status})`);
+      const data = await res.json();
+      const raw = data.items ?? (Array.isArray(data) ? data : data.results ?? []);
+      setGrns(raw);
+    } catch (err) {
+      console.error('Failed to fetch GRNs:', err);
+      setGrns([]);
+    } finally {
+      setGrnsLoading(false);
+    }
+  }, []);
+
+  const fetchInvoices = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) { setInvoicesLoading(false); return; }
+    setInvoicesLoading(true);
+    try {
+      const res = await fetch('/api/v1/purchase-invoices/', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
+      if (!res.ok) throw new Error(`Invoice fetch failed (${res.status})`);
+      const data = await res.json();
+      const raw = data.items ?? (Array.isArray(data) ? data : data.results ?? []);
+      setInvoices(raw);
+    } catch (err) {
+      console.error('Failed to fetch invoices:', err);
+      setInvoices([]);
+    } finally {
+      setInvoicesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchRFQs(); fetchPurchaseOrders(); fetchGRNs(); fetchInvoices(); }, [fetchRFQs, fetchPurchaseOrders, fetchGRNs, fetchInvoices]);
 
   function showToast(msg) { setToast(msg); }
   function toggleKpi(key) { setOpenKpi(p => p === key ? null : key); }
@@ -708,6 +1134,36 @@ export default function Purchases({ goPage }) {
     }
   }
 
+  async function handleCreateInvoice(grn) {
+    const token = localStorage.getItem('token');
+    if (!token) { showToast('Not authenticated.'); return; }
+    setCreatingInvoiceFor(prev => new Set(prev).add(grn.id));
+    console.log('GRN ID:', grn.id);
+    try {
+      const res = await fetch('/api/v1/invoices/from-grn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ grn_id: grn.id }),
+      });
+      if (res.status === 409 || res.status === 400) {
+        showToast('Invoice already exists for this GRN');
+        await fetchInvoices();
+        return;
+      }
+      if (!res.ok) throw new Error(`Failed to create invoice (${res.status})`);
+      const created = await res.json();
+      setInvoices(prev => [...prev, created]);
+      showToast('Invoice created successfully');
+    } catch (err) {
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setCreatingInvoiceFor(prev => { const s = new Set(prev); s.delete(grn.id); return s; });
+    }
+  }
+
+  // Map grn_id → invoice for quick lookup in GRN table
+  const grnInvoiceMap = new Map(invoices.map(inv => [inv.grn_id, inv]));
+
   const safeRfqs = Array.isArray(rfqs) ? rfqs : [];
   const filteredRFQs = safeRfqs.filter(r =>
     search === '' || r.desc.toLowerCase().includes(search.toLowerCase()) || r.num.toLowerCase().includes(search.toLowerCase())
@@ -718,7 +1174,19 @@ export default function Purchases({ goPage }) {
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
       {modal === 'po'  && <CreatePOModal  onClose={() => { setModal(null); setCreatePOPrefill(null); }} onSave={showToast} prefill={createPOPrefill} />}
       {modal === 'rfq' && <CreateRFQModal onClose={() => setModal(null)} onSuccess={() => { fetchRFQs(); showToast('RFQ created successfully'); }} />}
-      {rfqDetail && <RFQDetailModal rfq={rfqDetail} onClose={() => setRfqDetail(null)} onSend={fetchRFQs} />}
+      {showGRNModal && <CreateGRNModal onClose={() => setShowGRNModal(false)} onSuccess={() => { fetchGRNs(); showToast('GRN created successfully'); }} />}
+      {selectedPO && <PODetailModal po={selectedPO} onClose={() => setSelectedPO(null)} />}
+      {selectedInvoice && (
+        <InvoiceDetailModal
+          invoice={selectedInvoice}
+          onClose={() => setSelectedInvoice(null)}
+          onUpdated={updated => {
+            setInvoices(prev => prev.map(inv => inv.id === updated.id ? updated : inv));
+            setSelectedInvoice(updated);
+          }}
+        />
+      )}
+      {rfqDetail && <RFQDetailModal rfq={rfqDetail} onClose={() => setRfqDetail(null)} onSend={fetchRFQs} purchaseOrders={purchaseOrders} onPOCreated={fetchPurchaseOrders} />}
 
       <Sidebar activePage="purchases" goPage={goPage} />
       <div className="db-main">
@@ -772,7 +1240,7 @@ export default function Purchases({ goPage }) {
           <div className="pur-layout">
             {/* Left nav */}
             <div className="pur-nav-card">
-              {[['RFQs',8],['Purchase Orders',24],['Receipts/GRN',42],['Suppliers Directory',156]].map(([name,count]) => (
+              {[['RFQs',8],['Purchase Orders',24],['Receipts/GRN',42],['Invoices', invoices.length],['Suppliers Directory',156]].map(([name,count]) => (
                 <div key={name} className={`pur-nav-item${activeNav===name?' active':''}`} onClick={() => setActiveNav(name)}>
                   <span className="pur-nav-name">{name}</span>
                   <span className="pur-nav-count">{count}</span>
@@ -851,20 +1319,34 @@ export default function Purchases({ goPage }) {
                     <button className="pur-btn-primary" style={{ height:'34px',padding:'0 14px',fontSize:'12.5px' }} onClick={() => setModal('po')}>+ New PO</button>
                   </div>
                   <table className="pur-table">
-                    <thead><tr><th>PO Number</th><th>Supplier</th><th>Item</th><th className="right">Amount</th><th className="center">Status</th><th className="center">Action</th></tr></thead>
+                    <thead><tr><th>PO Number</th><th>Supplier</th><th>RFQ</th><th className="center">Status</th><th>Created</th><th className="center">Action</th></tr></thead>
                     <tbody>
-                      {NAV_CONTENT['Purchase Orders'].map(po => (
-                        <tr key={po.num} className="pur-table-row">
-                          <td className="pur-ref">{po.num}</td>
-                          <td>{po.supplier}</td>
-                          <td style={{ color:'#6b7280', fontSize:'13px' }}>{po.item}</td>
-                          <td className="right" style={{ fontWeight:700 }}>{po.amount}</td>
-                          <td className="center"><span className={`pur-status-badge ${po.statusCls}`}>{po.status}</span></td>
-                          <td className="center">
-                            <button className="pur-link-btn" onClick={() => showToast(`Viewing ${po.num}`)}>View</button>
-                          </td>
-                        </tr>
-                      ))}
+                      {purchaseOrdersLoading ? (
+                        <tr><td colSpan={6} style={{ padding:'16px', textAlign:'center', color:'#9ca3af', fontSize:'13.5px' }}>Loading…</td></tr>
+                      ) : purchaseOrders.length === 0 ? (
+                        <tr><td colSpan={6} style={{ padding:'16px', textAlign:'center', color:'#9ca3af', fontSize:'13.5px' }}>No Purchase Orders found</td></tr>
+                      ) : purchaseOrders.map((po, i) => {
+                        const supplierName = po.supplier_name ?? po.supplier?.company_name ?? po.supplier?.name ?? po.supplier_id ?? '—';
+                        const status       = po.status ?? '—';
+                        const statusCls    = status.toLowerCase() === 'completed' ? 'po-delivered'
+                                           : status.toLowerCase() === 'partial'   ? 'po-pending'
+                                           : status.toLowerCase() === 'approved'  ? 'po-approved'
+                                           : status.toLowerCase() === 'delivered' ? 'po-delivered'
+                                           : 'po-approved';
+                        const createdAt    = po.created_at ? new Date(po.created_at).toLocaleDateString() : '—';
+                        return (
+                          <tr key={po.id ?? i} className="pur-table-row">
+                            <td className="pur-ref">{po.id}</td>
+                            <td>{supplierName}</td>
+                            <td style={{ color:'#6b7280', fontSize:'13px' }}>{po.rfq_id ?? '—'}</td>
+                            <td className="center"><span className={`pur-status-badge ${statusCls}`}>{status}</span></td>
+                            <td style={{ color:'#6b7280', fontSize:'13px' }}>{createdAt}</td>
+                            <td className="center">
+                              <button className="pur-link-btn" onClick={() => setSelectedPO(po)}>View</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -875,21 +1357,142 @@ export default function Purchases({ goPage }) {
                 <div className="pur-tab-card">
                   <div className="pur-tab-header">
                     <span className="pur-tab-title">Goods Receipt Notes</span>
-                    <button className="pur-btn-secondary" style={{ height:'34px',padding:'0 14px',fontSize:'12.5px' }} onClick={() => showToast('New GRN form opened')}>+ New GRN</button>
+                    <button className="pur-btn-secondary" style={{ height:'34px',padding:'0 14px',fontSize:'12.5px' }} onClick={() => setShowGRNModal(true)}>+ New GRN</button>
                   </div>
                   <table className="pur-table">
-                    <thead><tr><th>GRN Number</th><th>PO Reference</th><th>Supplier</th><th>Date</th><th className="center">Items</th><th className="center">Status</th></tr></thead>
+                    <thead><tr><th>GRN Number</th><th>PO Reference</th><th>Supplier</th><th>Date</th><th className="center">Received Qty</th><th className="center">Status</th><th className="center">Invoice</th></tr></thead>
                     <tbody>
-                      {NAV_CONTENT['Receipts/GRN'].map(grn => (
-                        <tr key={grn.num} className="pur-table-row" onClick={() => showToast(`Viewing ${grn.num}`)}>
-                          <td className="pur-ref">{grn.num}</td>
-                          <td style={{ color:'#2563eb', fontWeight:600, cursor:'pointer' }}>{grn.po}</td>
-                          <td>{grn.supplier}</td>
-                          <td style={{ color:'#6b7280', fontSize:'13px' }}>{grn.date}</td>
-                          <td className="center" style={{ fontWeight:600 }}>{grn.items}</td>
-                          <td className="center"><span className={`pur-status-badge ${grn.status==='Complete'?'po-delivered':'po-pending'}`}>{grn.status}</span></td>
+                      {grnsLoading ? (
+                        <tr><td colSpan={7} style={{ padding:'16px', textAlign:'center', color:'#9ca3af', fontSize:'13.5px' }}>Loading…</td></tr>
+                      ) : grns.length === 0 ? (
+                        <tr><td colSpan={7} style={{ padding:'16px', textAlign:'center', color:'#9ca3af', fontSize:'13.5px' }}>No GRNs yet</td></tr>
+                      ) : grns.map((grn, i) => {
+                        const rawStatus = grn.status?.toLowerCase();
+                        const status    = rawStatus === 'completed' ? 'Completed'
+                                        : rawStatus === 'partial'   ? 'Partial'
+                                        : rawStatus === 'created'   ? 'Created'
+                                        : grn.received_quantity > 0 && grn.received_quantity >= (grn.total_quantity ?? grn.ordered_quantity ?? grn.received_quantity) ? 'Completed'
+                                        : grn.received_quantity > 0 ? 'Partial'
+                                        : 'Created';
+                        const statusCls = status === 'Completed' ? 'po-delivered' : status === 'Partial' ? 'po-pending' : 'po-approved';
+                        const date      = grn.created_at ? new Date(grn.created_at).toLocaleDateString() : '—';
+                        const supplier  = grn.supplier_name ?? grn.supplier?.company_name ?? '—';
+                        const existingInv  = grnInvoiceMap.get(grn.id);
+                        const isCreating   = creatingInvoiceFor.has(grn.id);
+                        const invStatus    = existingInv?.status?.toLowerCase() ?? '';
+                        const invBadgeCls  = invStatus === 'paid' ? 'po-delivered' : invStatus === 'approved' ? 'rb-review' : 'rb-pending';
+                        const invBadgeLbl  = invStatus === 'paid' ? 'Paid' : invStatus === 'approved' ? 'Approved' : 'Draft';
+                        return (
+                          <tr key={grn.id ?? i} className="pur-table-row">
+                            <td className="pur-ref">{grn.id}</td>
+                            <td style={{ color:'#2563eb', fontWeight:600 }}>{grn.po_id ?? '—'}</td>
+                            <td>{supplier}</td>
+                            <td style={{ color:'#6b7280', fontSize:'13px' }}>{date}</td>
+                            <td className="center" style={{ fontWeight:600 }}>{grn.received_quantity ?? '—'}</td>
+                            <td className="center"><span className={`pur-status-badge ${statusCls}`}>{status}</span></td>
+                            <td className="center">
+                              {existingInv ? (
+                                <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'4px' }}>
+                                  <span className={`pur-status-badge ${invBadgeCls}`}>{invBadgeLbl}</span>
+                                  {invStatus === 'paid' ? (
+                                    <button className="pur-link-btn" disabled style={{ color:'#9ca3af', cursor:'not-allowed' }}>Paid</button>
+                                  ) : (
+                                    <button className="pur-link-btn" style={{ color:'#2563eb' }} onClick={() => setSelectedInvoice(existingInv)}>View Invoice</button>
+                                  )}
+                                </div>
+                              ) : (
+                                <button
+                                  className="pur-link-btn"
+                                  style={{ color:'#7c3aed', fontWeight:600 }}
+                                  onClick={() => handleCreateInvoice(grn)}
+                                  disabled={isCreating}
+                                >
+                                  {isCreating ? 'Creating…' : '+ Invoice'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* ── Invoices tab ── */}
+              {activeNav === 'Invoices' && (
+                <div className="pur-tab-card">
+                  <div className="pur-tab-header">
+                    <span className="pur-tab-title">Invoices</span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      {[
+                        { label: 'All',      filter: null },
+                        { label: 'Draft',    filter: 'draft' },
+                        { label: 'Approved', filter: 'approved' },
+                        { label: 'Paid',     filter: 'paid' },
+                      ].map(({ label, filter }) => {
+                        const count = filter ? invoices.filter(inv => inv.status?.toLowerCase() === filter).length : invoices.length;
+                        return (
+                          <span
+                            key={label}
+                            className={`pur-status-badge ${filter === 'paid' ? 'po-approved' : filter === 'approved' ? 'po-delivered' : filter === 'draft' ? 'po-pending' : ''}`}
+                            style={{ cursor: 'default', fontSize: '12px' }}
+                          >
+                            {label} ({count})
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <table className="pur-table">
+                    <thead>
+                      <tr>
+                        <th>Invoice ID</th>
+                        <th>Supplier</th>
+                        <th>PO ID</th>
+                        <th>GRN ID</th>
+                        <th className="center">Amount</th>
+                        <th className="center">Status</th>
+                        <th>Date</th>
+                        <th className="center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoicesLoading ? (
+                        <tr><td colSpan={8} style={{ padding:'16px', textAlign:'center', color:'#9ca3af', fontSize:'13.5px' }}>Loading…</td></tr>
+                      ) : invoices.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} style={{ padding:'32px 16px', textAlign:'center' }}>
+                            <div style={{ color:'#9ca3af', fontSize:'13.5px', marginBottom:'6px' }}>No invoices yet</div>
+                            <div style={{ color:'#d1d5db', fontSize:'12.5px' }}>Create invoices from the Receipts/GRN tab</div>
+                          </td>
                         </tr>
-                      ))}
+                      ) : invoices.map((inv, i) => {
+                        const invStatus    = inv.status?.toLowerCase() ?? 'draft';
+                        const statusLabel  = invStatus === 'paid' ? 'Paid' : invStatus === 'approved' ? 'Approved' : 'Draft';
+                        const statusCls    = invStatus === 'paid' ? 'rb-completed' : invStatus === 'approved' ? 'rb-review' : 'rb-pending';
+                        const amount       = Number(inv.total_amount ?? inv.amount ?? 0);
+                        const supplier     = inv.supplier_name ?? inv.supplier?.company_name ?? '—';
+                        const date         = inv.created_at ? new Date(inv.created_at).toLocaleDateString() : '—';
+                        return (
+                          <tr key={inv.id ?? i} className="pur-table-row">
+                            <td className="pur-ref" style={{ fontSize:'12px' }}>{String(inv.id).slice(0,8)}…</td>
+                            <td style={{ fontWeight: 500 }}>{supplier}</td>
+                            <td style={{ color:'#6b7280', fontSize:'12px', maxWidth:'120px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{inv.po_id ?? '—'}</td>
+                            <td style={{ color:'#6b7280', fontSize:'12px', maxWidth:'120px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{inv.grn_id ?? '—'}</td>
+                            <td className="center" style={{ fontWeight: 700, color:'#111827' }}>
+                              {amount > 0 ? `$${amount.toLocaleString()}` : '—'}
+                            </td>
+                            <td className="center">
+                              <span className={`pur-status-badge ${statusCls}`}>{statusLabel}</span>
+                            </td>
+                            <td style={{ color:'#6b7280', fontSize:'13px' }}>{date}</td>
+                            <td className="center">
+                              <button className="pur-link-btn" onClick={() => setSelectedInvoice(inv)}>View</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
