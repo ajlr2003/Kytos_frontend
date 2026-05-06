@@ -1,0 +1,210 @@
+/*
+ * shared.css
+ *
+ * Global design system for the Kytos frontend. Contains:
+ *   - Reset & base typography
+ *   - Layout shell (sidebar, topbar, page padding)
+ *   - KPI cards and icon colour tokens
+ *   - Shared UI primitives: Toast, Modal overlay, status badges
+ *   - AI insight card
+ *
+ * All other CSS files (Dashboard.css, Sales.css, etc.) inherit these tokens
+ * and add only module-specific styles on top.
+ */
+
+/* ══════════════════════════
+   GLOBAL RESET & BASE
+══════════════════════════ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #f3f4f6;
+  color: #111827;
+}
+#sales-page .db-main,
+.db-main {
+  background: radial-gradient(ellipse at top right, #E1FCF3 0%, #EAFCF6 25%, #F1FAF9 55%, #F9FAFB 100%);
+  min-height: 100vh;
+}
+
+/* ══════════════════════════
+   SIDEBAR
+══════════════════════════ */
+.sb {
+  position: fixed; top: 0; left: 0;
+  width: 200px; height: 100vh;
+  background: #ffffff;
+  border-right: 1px solid #d1fae5;
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+}
+.sb-brand {
+  display: flex; align-items: center; gap: 11px;
+  padding: 20px 18px 18px;
+  border-bottom: 1px solid #d1fae5;
+}
+.sb-ico {
+  width: 64px; height: 64px;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sb-ico svg { width: 18px; height: 18px; stroke: #fff; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sb-name { font-size: 14px; font-weight: 700; color: #111827; }
+.sb-sub  { font-size: 11px; color: #9ca3af; }
+.sb-nav { padding: 10px 8px; flex: 1; overflow-y: auto; }
+.ni {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 7px;
+  font-size: 13.5px; font-weight: 400; color: #374151;
+  cursor: pointer; text-decoration: none;
+  transition: background .1s, color .1s;
+  margin-bottom: 2px;
+}
+.ni:hover { background: #f0fdf4; color: #111827; }
+.ni.active { background: #ecfef6; color: #074E3B; font-weight: 600; }
+.ni svg { width: 17px; height: 17px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ══════════════════════════
+   MAIN LAYOUT
+══════════════════════════ */
+.db-main { margin-left: 200px; min-height: 100vh; }
+
+/* ══════════════════════════
+   TOPBAR
+══════════════════════════ */
+.tb {
+  position: sticky; top: 0; z-index: 100;
+  height: 64px; background: #fff;
+  border-bottom: 1px solid #d1fae5;
+  padding: 0 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tb-title { font-size: 22px; font-weight: 700; color: #111827; letter-spacing: -0.3px; }
+.tb-right { display: flex; align-items: center; gap: 12px; }
+.tb-bell { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer; }
+.tb-bell:hover { background: #f9fafb; }
+.tb-bell svg { width: 20px; height: 20px; stroke: #6b7280; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tb-dot { position: absolute; top: 6px; right: 7px; width: 9px; height: 9px; border-radius: 50%; background: #ef4444; border: 2px solid #fff; }
+.tb-user { display: flex; align-items: center; gap: 9px; }
+.tb-avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg,#074E3B,#1E6D2F); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
+.tb-uname { font-size: 13px; font-weight: 600; color: #111827; }
+.tb-urole { font-size: 11px; color: #9ca3af; }
+
+/* ══════════════════════════
+   PAGE CONTENT PADDING
+══════════════════════════ */
+.pg { padding: 24px 20px 40px; }
+
+/* ══════════════════════════
+   SHARED: PAGE HEADER
+══════════════════════════ */
+.pg-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
+.pg-header-left h1 { font-size: 26px; font-weight: 700; color: #111827; letter-spacing: -0.4px; margin-bottom: 4px; }
+.pg-header-left p  { font-size: 13.5px; color: #6b7280; }
+.pg-header-actions { display: flex; gap: 10px; align-items: center; }
+.btn-action { height: 38px; padding: 0 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 7px; transition: opacity .12s; }
+.btn-action:hover { opacity: .88; }
+.btn-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.btn-blue   { background: #1E6D2F; color: #fff; }
+.btn-green  { background: #DDE907; color: #1a2e05; }
+.btn-purple { background: #1E6D2F; color: #fff; }
+
+/* ══════════════════════════
+   SHARED: KPI CARDS
+══════════════════════════ */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.kpi { background: #ffffff; border-radius: 12px; border: 1px solid #d1fae5; box-shadow: 0 1px 4px rgba(7,78,59,0.07), 0 1px 2px rgba(7,78,59,0.04); padding: 22px 20px 18px; }
+.kpi-label { font-size: 13px; color: #6b7280; font-weight: 400; margin-bottom: 10px; }
+.kpi-body { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.kpi-value { font-size: 30px; font-weight: 700; color: #111827; letter-spacing: -0.8px; line-height: 1; }
+.kpi-icon { width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.kpi-icon svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ic-g { background: #ECFEF6; color: #3F7868; }
+.ic-b { background: #EFF6FF; color: #4F82EF; }
+.ic-o { background: #FFF7ED; color: #EE7334; }
+.ic-p { background: #FFEED5; color: #9F3E1D; }
+.kpi-chg { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
+.kpi-chg svg { width: 13px; height: 13px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.up { color: #16a34a; }
+.dn { color: #dc2626; }
+
+/* ══════════════════════════
+   SHARED: AI CARD
+══════════════════════════ */
+.ai-card { margin-top: 10px; background: #f5f3ff; border-radius: 12px; border: 1px solid #ede9fe; box-shadow: 0 1px 3px rgba(0,0,0,0.04); padding: 18px 20px 16px; }
+.ai-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.ai-icon { width: 40px; height: 40px; border-radius: 50%; background: #7c3aed; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ai-icon svg { width: 20px; height: 20px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ai-title { font-size: 14.5px; font-weight: 700; color: #111827; }
+.ai-insight { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.ai-insight:last-of-type { margin-bottom: 0; }
+.ai-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.ai-dot-yellow { background: #f59e0b; }
+.ai-dot-green  { background: #22c55e; }
+.ai-dot-orange { background: #ef4444; }
+.ai-text { font-size: 13px; color: #374151; line-height: 1.5; }
+.ai-text strong { font-weight: 700; color: #111827; }
+.ai-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 12px; font-size: 13px; font-weight: 600; color: #7c3aed; cursor: pointer; background: none; border: none; padding: 0; }
+.ai-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ══════════════════════════
+   SHARED: STATUS BADGES
+══════════════════════════ */
+.status-badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.sb-active { background: #dcfce7; color: #15803d; }
+
+/* ══════════════════════════
+   SHARED: TOAST
+   Used by Toast component (src/components/ui/Toast.jsx).
+   Pages that imported their own toast can switch to this.
+══════════════════════════ */
+.pur-toast {
+  position: fixed; bottom: 28px; right: 28px;
+  background: #111827; color: #fff;
+  border-radius: 10px; padding: 12px 18px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13.5px; font-weight: 500;
+  z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  animation: pur-toast-in .22s ease;
+}
+@keyframes pur-toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ══════════════════════════
+   SHARED: MODAL OVERLAY
+   Used by Modal component (src/components/ui/Modal.jsx).
+══════════════════════════ */
+@keyframes pur-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pur-modal-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+
+.pur-modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  animation: pur-fade-in .15s ease;
+}
+.pur-modal {
+  background: #fff; border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  max-width: calc(100vw - 32px); max-height: 90vh; overflow-y: auto;
+  animation: pur-modal-in .18s ease;
+}
+.pur-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 22px 16px; border-bottom: 1px solid #f3f4f6;
+}
+.pur-modal-title  { font-size: 16px; font-weight: 700; color: #111827; }
+.pur-modal-close  {
+  background: none; border: none; cursor: pointer; color: #9ca3af;
+  display: flex; align-items: center; padding: 4px; border-radius: 6px;
+  transition: background .1s;
+}
+.pur-modal-close:hover { background: #f3f4f6; color: #374151; }
+.pur-modal-body   { padding: 20px 22px 22px; }
+.pur-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
