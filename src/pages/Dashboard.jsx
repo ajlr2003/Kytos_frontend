@@ -1,3 +1,4 @@
+import { API_BASE } from '../config.js';
 /**
  * src/pages/Dashboard.jsx
  *

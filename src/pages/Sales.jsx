@@ -1,3 +1,4 @@
+import { API_BASE } from '../config.js';
 /**
  * src/pages/Sales.jsx
  *
@@ -174,7 +175,7 @@ function QuotationBuilder({ onClose, onCreate, showToast, onAuthError }) {
     };
 
     try {
-      const res = await fetch('/api/v1/sales/quotations', {
+      const res = await fetch(`${API_BASE}/api/v1/sales/quotations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(payload),
@@ -188,7 +189,7 @@ function QuotationBuilder({ onClose, onCreate, showToast, onAuthError }) {
       const serverQuote = await res.json();
 
       if (shouldSend) {
-        const sendRes = await fetch(`/api/v1/sales/quotations/${serverQuote.id}/send`, {
+        const sendRes = await fetch(`${API_BASE}/api/v1/sales/quotations/${serverQuote.id}/send`, {
           method: 'PUT',
           headers: { 'Authorization': `Bearer ${token}` },
         });
@@ -740,7 +741,7 @@ export default function Sales({ goPage, onLogout }) {
     const token = getToken();
     if (!token) return;
 
-    fetch('/api/v1/sales/quotations', {
+    fetch(`${API_BASE}/api/v1/sales/quotations`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => {
@@ -752,7 +753,7 @@ export default function Sales({ goPage, onLogout }) {
       })
       .catch(() => {});
 
-    fetch('/api/v1/dashboard/sales', {
+    fetch(`${API_BASE}/api/v1/dashboard/sales`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.ok ? r.json() : null)
@@ -766,7 +767,7 @@ export default function Sales({ goPage, onLogout }) {
       })
       .catch(() => {});
 
-    fetch('/api/v1/sales/orders', {
+    fetch(`${API_BASE}/api/v1/sales/orders`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => {
@@ -805,7 +806,7 @@ export default function Sales({ goPage, onLogout }) {
     if (isActionPending(key)) return;
     setActionPending(key, true);
     try {
-      const res = await fetch(`/api/v1/sales/quotations/${quote.id}/${endpoint}`, {
+      const res = await fetch(`${API_BASE}/api/v1/sales/quotations/${quote.id}/${endpoint}`, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -833,7 +834,7 @@ export default function Sales({ goPage, onLogout }) {
     if (isActionPending(key)) return;
     setActionPending(key, true);
     try {
-      const res = await fetch(`/api/v1/sales/quotations/${quote.id}/convert`, {
+      const res = await fetch(`${API_BASE}/api/v1/sales/quotations/${quote.id}/convert`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -859,7 +860,7 @@ export default function Sales({ goPage, onLogout }) {
     if (isActionPending(key)) return;
     setActionPending(key, true);
     try {
-      const res = await fetch(`/api/v1/sales/orders/${order.id}/status`, {
+      const res = await fetch(`${API_BASE}/api/v1/sales/orders/${order.id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ status: newStatus }),
@@ -884,7 +885,7 @@ export default function Sales({ goPage, onLogout }) {
     if (!quote.id || !token) { showToast('Cannot generate PDF — not logged in'); return; }
     showToast('Generating PDF…');
     try {
-      const res = await fetch(`/api/v1/sales/quotations/${quote.id}/pdf`, {
+      const res = await fetch(`${API_BASE}/api/v1/sales/quotations/${quote.id}/pdf`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.status === 401) { handleAuthError(); return; }

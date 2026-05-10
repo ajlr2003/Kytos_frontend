@@ -1,3 +1,4 @@
+import { API_BASE } from '../config.js';
 /**
  * src/pages/Purchases.jsx
  *
@@ -60,7 +61,7 @@ function CreateGRNModal({ onClose, onSuccess }) {
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { setPoError('Not authenticated.'); setPoLoading(false); return; }
-    fetch('/api/v1/purchase-orders/', {
+    fetch(`${API_BASE}/api/v1/purchase-orders/`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : Promise.reject(`Failed to load POs (${res.status})`))
@@ -78,7 +79,7 @@ function CreateGRNModal({ onClose, onSuccess }) {
     const token = localStorage.getItem('token');
     if (!token) return;
     setPoDetailsLoading(true);
-    fetch(`/api/v1/purchase-orders/${poId}`, {
+    fetch(`${API_BASE}/api/v1/purchase-orders/${poId}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : Promise.reject())
@@ -112,7 +113,7 @@ function CreateGRNModal({ onClose, onSuccess }) {
     setSaving(true);
     setError('');
     try {
-      const res = await fetch('/api/v1/grn/', {
+      const res = await fetch(`${API_BASE}/api/v1/grn/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ po_id: poId, received_quantity: qtyNum }),
@@ -245,7 +246,7 @@ function CreateRFQModal({ onClose, onSuccess }) {
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { setSuppliersLoading(false); return; }
-    fetch('/api/v1/suppliers/', { headers: { 'Authorization': `Bearer ${token}` } })
+    fetch(`${API_BASE}/api/v1/suppliers/`, { headers: { 'Authorization': `Bearer ${token}` } })
       .then(res => res.ok ? res.json() : Promise.reject(res.status))
       .then(data => {
         console.log('Suppliers API:', data);
@@ -304,7 +305,7 @@ function CreateRFQModal({ onClose, onSuccess }) {
       };
       console.log('RFQ Payload:', payload);
 
-      const res = await fetch('/api/v1/rfqs/', {
+      const res = await fetch(`${API_BASE}/api/v1/rfqs/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(payload),
@@ -490,7 +491,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
     console.log('Token:', token);
     console.log('Fetching RFQ ID:', rfq.id);
     if (!token) { setError('Not authenticated.'); setLoading(false); return; }
-    fetch(`/api/v1/rfqs/${rfq.id}/`, {
+    fetch(`${API_BASE}/api/v1/rfqs/${rfq.id}/`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => {
@@ -510,7 +511,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
       .finally(() => setLoading(false));
 
     // Check if PO already exists for this RFQ
-    fetch(`/api/v1/purchase-orders/?rfq_id=${rfq.id}`, {
+    fetch(`${API_BASE}/api/v1/purchase-orders/?rfq_id=${rfq.id}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : null)
@@ -524,7 +525,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
       .catch(() => {});
 
     // Fetch quotations
-    fetch(`/api/v1/rfqs/${rfq.id}/quotations`, {
+    fetch(`${API_BASE}/api/v1/rfqs/${rfq.id}/quotations`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : [])
@@ -549,7 +550,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
     if (!token) { setError('Not authenticated.'); return; }
     setSending(true);
     try {
-      const res = await fetch(`/api/v1/rfqs/${rfq.id}/send/`, {
+      const res = await fetch(`${API_BASE}/api/v1/rfqs/${rfq.id}/send/`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -570,7 +571,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
     setAutoSelecting(true);
     setSelectError('');
     try {
-      const res = await fetch(`/api/v1/rfqs/${rfq.id}/auto-select`, {
+      const res = await fetch(`${API_BASE}/api/v1/rfqs/${rfq.id}/auto-select`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -596,7 +597,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
     setCreatingPO(true);
     setPoError('');
     try {
-      const res = await fetch('/api/v1/purchase-orders/', {
+      const res = await fetch(`${API_BASE}/api/v1/purchase-orders/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -769,7 +770,7 @@ function PODetailModal({ po, onClose }) {
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { setError('Not authenticated.'); setLoading(false); return; }
-    fetch(`/api/v1/purchase-orders/${po.id}`, {
+    fetch(`${API_BASE}/api/v1/purchase-orders/${po.id}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : Promise.reject(`Failed to load PO (${res.status})`))
@@ -850,7 +851,7 @@ function InvoiceDetailModal({ invoice: initInvoice, onClose, onUpdated }) {
     setActioning(action);
     setError('');
     try {
-      const res = await fetch(`/api/v1/purchase-invoices/${invoice.id}/${action}`, {
+      const res = await fetch(`${API_BASE}/api/v1/purchase-invoices/${invoice.id}/${action}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -1015,7 +1016,7 @@ export default function Purchases({ goPage }) {
 
     setRfqsLoading(true);
     try {
-      const res = await fetch('/api/v1/rfqs/', {
+      const res = await fetch(`${API_BASE}/api/v1/rfqs/`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
 
@@ -1048,7 +1049,7 @@ export default function Purchases({ goPage }) {
     if (!token) { setPurchaseOrdersLoading(false); return; }
     setPurchaseOrdersLoading(true);
     try {
-      const res = await fetch('/api/v1/purchase-orders/', {
+      const res = await fetch(`${API_BASE}/api/v1/purchase-orders/`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
@@ -1071,7 +1072,7 @@ export default function Purchases({ goPage }) {
     if (!token) { setGrnsLoading(false); return; }
     setGrnsLoading(true);
     try {
-      const res = await fetch('/api/v1/grn/', {
+      const res = await fetch(`${API_BASE}/api/v1/grn/`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
@@ -1092,7 +1093,7 @@ export default function Purchases({ goPage }) {
     if (!token) { setInvoicesLoading(false); return; }
     setInvoicesLoading(true);
     try {
-      const res = await fetch('/api/v1/purchase-invoices/', {
+      const res = await fetch(`${API_BASE}/api/v1/purchase-invoices/`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return; }
@@ -1128,7 +1129,7 @@ export default function Purchases({ goPage }) {
     setCreatingInvoiceFor(prev => new Set(prev).add(grn.id));
     console.log('GRN ID:', grn.id);
     try {
-      const res = await fetch('/api/v1/invoices/from-grn', {
+      const res = await fetch(`${API_BASE}/api/v1/invoices/from-grn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ grn_id: grn.id }),
