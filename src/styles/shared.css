@@ -67,6 +67,25 @@ body {
 .ni.active { background: #ecfef6; color: #074E3B; font-weight: 600; }
 .ni svg { width: 17px; height: 17px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 
+.sb-subnav { padding: 2px 0 4px 14px; margin-bottom: 2px; border-left: 1px solid #d1fae5; margin-left: 22px; }
+.sb-navgroup {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; border-radius: 6px;
+  font-size: 12.5px; font-weight: 600; color: #374151;
+  cursor: pointer; text-decoration: none; transition: background .1s, color .1s;
+}
+.sb-navgroup:hover { background: #f0fdf4; }
+.sb-navgroup svg { flex-shrink: 0; opacity: 0.6; transition: transform .12s; }
+.sb-navgroup.open svg { transform: rotate(180deg); }
+.sb-subnav2 { padding: 2px 0 4px 10px; margin-bottom: 2px; border-left: 1px solid #f0fdf4; margin-left: 10px; }
+.sb-navsub {
+  display: block; padding: 6px 10px; border-radius: 6px;
+  font-size: 12px; font-weight: 400; color: #6b7280;
+  cursor: pointer; text-decoration: none; transition: background .1s, color .1s;
+}
+.sb-navsub:hover { background: #f0fdf4; color: #111827; }
+.sb-navsub.active { color: #074E3B; font-weight: 600; }
+
 /* ══════════════════════════
    MAIN LAYOUT
 ══════════════════════════ */
@@ -83,6 +102,8 @@ body {
   display: flex; align-items: center; justify-content: space-between;
 }
 .tb-title { font-size: 22px; font-weight: 700; color: #111827; letter-spacing: -0.3px; }
+.tb-title.tb-title-block { display: flex; flex-direction: column; gap: 2px; font-size: 18px; }
+.tb-subtitle { font-size: 12px; font-weight: 400; color: #6b7280; letter-spacing: 0; }
 .tb-right { display: flex; align-items: center; gap: 12px; }
 .tb-bell { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer; }
 .tb-bell:hover { background: #f9fafb; }
@@ -155,6 +176,7 @@ body {
 ══════════════════════════ */
 .status-badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
 .sb-active { background: #dcfce7; color: #15803d; }
+.sb-inactive { background: #f3f4f6; color: #6b7280; }
 
 /* ══════════════════════════
    SHARED: TOAST

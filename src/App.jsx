@@ -20,6 +20,7 @@ import './styles/shared.css';
 
 /* ─── Page imports ──────────────────────────────────────────────── */
 import Login        from './pages/Login';
+import Signup       from './pages/Signup';
 import Dashboard    from './pages/Dashboard';
 import Accounting   from './pages/Accounting';
 import Invoicing    from './pages/Invoicing';
@@ -28,29 +29,43 @@ import Sales        from './pages/Sales';
 import CRM          from './pages/CRM';
 import Inventory    from './pages/Inventory';
 import Projects     from './pages/Projects';
+import Contracts    from './pages/Contracts';
 import Expenses     from './pages/Expenses';
 import Documents    from './pages/Documents';
 import Intelligence from './pages/Intelligence';
 import AICopilot    from './pages/AICopilot';
+import Users        from './pages/Users';
 
 /* ─── Component ─────────────────────────────────────────────────── */
 
 export default function App() {
-  const [showLogin, setShowLogin] = useState(true);
-  const [page, setPage]           = useState('dashboard');
+  const [showLogin, setShowLogin]   = useState(true);
+  const [showSignup, setShowSignup] = useState(false);
+  const [page, setPage]             = useState('dashboard');
 
   function handleLogin() {
     setShowLogin(false);
+    setShowSignup(false);
   }
 
   function handleLogout() {
     localStorage.removeItem('token');
     setShowLogin(true);
+    setShowSignup(false);
     setPage('dashboard');
   }
 
+  if (showSignup) {
+    return (
+      <Signup
+        onSignup={handleLogin}
+        onSwitchToLogin={() => setShowSignup(false)}
+      />
+    );
+  }
+
   if (showLogin) {
-    return <Login onLogin={handleLogin} />;
+    return <Login onLogin={handleLogin} onSwitchToSignup={() => setShowSignup(true)} />;
   }
 
   const goPage = key => setPage(key);
@@ -67,10 +82,12 @@ export default function App() {
       {page === 'crm'          && <CRM          goPage={goPage} onLogout={handleLogout} />}
       {page === 'inventory'    && <Inventory    goPage={goPage} onLogout={handleLogout} />}
       {page === 'projects'     && <Projects     goPage={goPage} onLogout={handleLogout} />}
+      {page === 'contracts'    && <Contracts    goPage={goPage} onLogout={handleLogout} />}
       {page === 'expenses'     && <Expenses     goPage={goPage} onLogout={handleLogout} />}
       {page === 'documents'    && <Documents    goPage={goPage} onLogout={handleLogout} />}
       {page === 'intelligence' && <Intelligence goPage={goPage} onLogout={handleLogout} />}
       {page === 'aicopilot'    && <AICopilot    goPage={goPage} onLogout={handleLogout} />}
+      {page === 'users'        && <Users        goPage={goPage} onLogout={handleLogout} />}
     </>
   );
 }

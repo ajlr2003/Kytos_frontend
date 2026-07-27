@@ -6,8 +6,13 @@
  *
  * Requires `.pur-modal-*` CSS classes, declared in shared.css.
  *
+ * Every modal in the app shares one standard width (1200px, default) so
+ * dialogs feel consistent regardless of which page opens them. Only pass
+ * `width` to deliberately deviate from that standard — don't add one-off
+ * sizes for individual modals.
+ *
  * Usage:
- *   <Modal title="Edit Item" onClose={() => setOpen(false)} width={560}>
+ *   <Modal title="Edit Item" onClose={() => setOpen(false)}>
  *     <p>Modal content here</p>
  *   </Modal>
  */
@@ -20,7 +25,7 @@
  *   children: React.ReactNode,
  * }} props
  */
-export default function Modal({ title, onClose, width = 480, children }) {
+export default function Modal({ title, onClose, width = 1200, children }) {
   return (
     <div className="pur-modal-overlay" onClick={onClose}>
       <div

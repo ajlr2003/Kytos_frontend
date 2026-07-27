@@ -21,6 +21,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
+import ActivityTimeline from '../components/ui/ActivityTimeline';
 import { API_BASE } from '../config';
 import '../styles/CRM.css';
 
@@ -106,6 +107,7 @@ function AddLeadModal({ onClose, onSave }) {
   const [form, setForm] = useState({
     company: '', contact_person: '', email: '', phone: '',
     deal_value: '', stage: 'new_leads', source: '', industry: '', owner: '',
+    customer_reference: '',
   });
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
@@ -205,6 +207,10 @@ function AddLeadModal({ onClose, onSave }) {
           <div className="pur-form-group">
             <label>Owner (Salesperson)</label>
             <input type="text" placeholder="Name of responsible salesperson" value={form.owner} onChange={e => setForm({...form, owner: e.target.value})} />
+          </div>
+          <div className="pur-form-group">
+            <label>Customer's Own Reference / Lead Number</label>
+            <input type="text" placeholder="e.g. 44 (the number the customer gave you)" value={form.customer_reference} onChange={e => setForm({...form, customer_reference: e.target.value})} />
           </div>
           <div className="pur-modal-actions">
             <button className="pur-btn-cancel" onClick={onClose}>Cancel</button>
@@ -306,9 +312,18 @@ function LogCallModal({ leads, onClose, onSave }) {
  */
 function LeadDetailModal({ lead, onClose, onMove, onLog }) {
   const stageKeys = ['new_leads', 'qualified', 'proposal', 'closed_won'];
+  const [linkedRfqs, setLinkedRfqs] = useState([]);
+
+  useEffect(() => {
+    if (!lead.id) return;
+    fetch(`${API_BASE}/api/v1/crm/leads/${lead.id}/rfqs`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : { items: [] })
+      .then(d => setLinkedRfqs(d.items ?? []))
+      .catch(() => {});
+  }, [lead.id]);
 
   return (
-    <Modal title={lead.company} onClose={onClose} width={520}>
+    <Modal title={lead.company} onClose={onClose}>
       <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'16px',paddingBottom:'16px',borderBottom:'1px solid #f3f4f6'}}>
         <div style={{width:'48px',height:'48px',borderRadius:'50%',background:lead.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:700,color:'#fff',flexShrink:0}}>{lead.initials}</div>
         <div>
@@ -323,6 +338,27 @@ function LeadDetailModal({ lead, onClose, onMove, onLog }) {
       {lead.email && <div className="pur-detail-row"><span>Email</span><span>{lead.email}</span></div>}
       {lead.phone && <div className="pur-detail-row"><span>Phone</span><span>{lead.phone}</span></div>}
       {lead.quote_number && <div className="pur-detail-row"><span>Quotation</span><strong style={{color:'#2563eb'}}>{lead.quote_number}</strong></div>}
+      {lead.rfq_number && <div className="pur-detail-row"><span>RFQ</span><strong style={{color:'#2563eb'}}>{lead.rfq_number}</strong></div>}
+      {lead.customer_reference && <div className="pur-detail-row"><span>Customer RFQ Ref</span><strong style={{color:'#2563eb'}}>{lead.customer_reference}</strong></div>}
+
+      {linkedRfqs.length > 0 && (
+        <div style={{margin:'12px 0'}}>
+          <div style={{fontSize:'12.5px',fontWeight:600,color:'#374151',marginBottom:'8px'}}>
+            RFQs Raised for this Lead ({linkedRfqs.length})
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+            {linkedRfqs.map(r => (
+              <div key={r.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#f9fafb',border:'1px solid #f3f4f6',borderRadius:'8px',padding:'8px 10px'}}>
+                <span style={{fontSize:'12.5px',fontWeight:600,color:'#2563eb'}}>{r.rfq_number}</span>
+                <span style={{fontSize:'11.5px',color:'#6b7280',textTransform:'capitalize'}}>{r.status}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{margin:'16px 0 8px',fontSize:'12.5px',fontWeight:600,color:'#374151'}}>Activity</div>
+      <ActivityTimeline entityType="crm_lead" entityId={lead.id} />
 
       <div style={{margin:'16px 0 12px'}}>
         <div style={{fontSize:'12.5px',fontWeight:600,color:'#374151',marginBottom:'10px'}}>Move to Stage</div>
@@ -655,6 +691,9 @@ export default function CRM({ goPage }) {
                               {lead.quote_number && (
                                 <div style={{marginTop:'6px',fontSize:'11px',color:'#2563eb',fontWeight:600}}>📄 {lead.quote_number}</div>
                               )}
+                              {lead.customer_reference && (
+                                <div style={{marginTop:'2px',fontSize:'11px',color:'#6b7280'}}>Cust. Ref: {lead.customer_reference}</div>
+                              )}
                             </div>
                           ))}
                           <button
@@ -739,6 +778,8 @@ export default function CRM({ goPage }) {
                     <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',color:'#6b7280'}}>Stage</span><span style={{fontSize:'12px',fontWeight:600,background:selectedLead.stageBg,color:selectedLead.stageColor,padding:'2px 8px',borderRadius:'10px'}}>{selectedLead.stageLabel}</span></div>
                     {selectedLead.owner && <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',color:'#6b7280'}}>Owner</span><span style={{fontSize:'13px',color:'#111827'}}>{selectedLead.owner}</span></div>}
                     {selectedLead.quote_number && <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',color:'#6b7280'}}>Quotation</span><span style={{fontSize:'13px',fontWeight:600,color:'#2563eb'}}>{selectedLead.quote_number}</span></div>}
+                    {selectedLead.rfq_number && <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',color:'#6b7280'}}>RFQ</span><span style={{fontSize:'13px',fontWeight:600,color:'#2563eb'}}>{selectedLead.rfq_number}</span></div>}
+                    {selectedLead.customer_reference && <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',color:'#6b7280'}}>Customer RFQ Ref</span><span style={{fontSize:'13px',fontWeight:600,color:'#2563eb'}}>{selectedLead.customer_reference}</span></div>}
                     <div style={{paddingTop:'14px',borderTop:'1px solid #f3f4f6'}}>
                       <div style={{fontSize:'13.5px',fontWeight:600,color:'#111827',marginBottom:'10px'}}>Contact Info</div>
                       {selectedLead.email && (

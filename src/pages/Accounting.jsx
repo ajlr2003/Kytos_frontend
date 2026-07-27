@@ -168,6 +168,7 @@ function JournalEntryModal({ accounts, onClose, onSaved }) {
 
   async function save() {
     if (!form.description) { setError('Description is required'); return; }
+    if (!form.account_id) { setError('Account is required — an entry with no account never appears on any financial report'); return; }
     if (!form.debit_amount && !form.credit_amount) { setError('Enter a debit or credit amount'); return; }
     setSaving(true); setError('');
     try {
@@ -180,7 +181,7 @@ function JournalEntryModal({ accounts, onClose, onSaved }) {
           debit_amount: parseFloat(form.debit_amount || 0),
           credit_amount: parseFloat(form.credit_amount || 0),
           notes: form.notes || null,
-          account_id: form.account_id || null,
+          account_id: form.account_id,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
@@ -209,7 +210,7 @@ function JournalEntryModal({ accounts, onClose, onSaved }) {
               <input type="date" value={form.entry_date} onChange={e => setForm({ ...form, entry_date: e.target.value })} />
             </div>
             <div className="acc-form-group">
-              <label>Account</label>
+              <label>Account *</label>
               <select value={form.account_id} onChange={e => setForm({ ...form, account_id: e.target.value })}>
                 <option value="">Select account…</option>
                 {accounts.map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
@@ -509,6 +510,100 @@ function JeDetailModal({ entry, onClose, onPost }) {
 }
 
 /* =============================================================================
+   BANK TRANSACTIONS MODAL
+   Lists all imported transactions for a bank account so the user can verify
+   what a CSV import actually produced, and reconcile transactions
+   individually rather than only via the blind "Reconcile All" bulk action.
+   GET  /api/v1/accounting/bank-accounts/{id}/transactions
+   POST /api/v1/accounting/bank-accounts/{id}/reconcile (per-row, one id at a time)
+============================================================================= */
+
+/**
+ * @param {{ bank: Object, onClose: () => void, onChanged: () => void }} props
+ */
+function BankTransactionsModal({ bank, onClose, onChanged }) {
+  const [txns, setTxns]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+  const [reconcilingId, setReconcilingId] = useState(null);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/accounting/bank-accounts/${bank.id}/transactions`, { headers: authHeaders() });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to load transactions');
+      const data = await res.json();
+      setTxns(data.items ?? []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function reconcileOne(txnId) {
+    setReconcilingId(txnId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/accounting/bank-accounts/${bank.id}/reconcile`, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ transaction_ids: [txnId] }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to reconcile');
+      setTxns(prev => prev.map(t => t.id === txnId ? { ...t, is_reconciled: true } : t));
+      onChanged();
+    } catch (e) { setError(e.message); }
+    finally { setReconcilingId(null); }
+  }
+
+  return (
+    <Modal title={`${bank.name} — Transactions`} onClose={onClose}>
+      {loading ? (
+        <div style={{ padding: '24px', textAlign: 'center', color: '#9ca3af' }}>Loading…</div>
+      ) : error ? (
+        <div style={{ color: '#dc2626', fontSize: '13px' }}>{error}</div>
+      ) : txns.length === 0 ? (
+        <div style={{ padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '14px' }}>
+          No transactions imported yet for this account. Use <strong>Import Bank Statement</strong> to load a CSV.
+        </div>
+      ) : (
+        <div style={{ maxHeight: '440px', overflowY: 'auto' }}>
+          <table className="je-tbl">
+            <thead><tr><th>Date</th><th>Description</th><th className="right">Amount</th><th>Reference</th><th className="center">Status</th></tr></thead>
+            <tbody>
+              {txns.map(t => (
+                <tr key={t.id}>
+                  <td>{t.transaction_date}</td>
+                  <td>{t.description}</td>
+                  <td className="right" style={{ color: t.amount >= 0 ? '#16a34a' : '#dc2626' }}>
+                    {t.amount >= 0 ? '+' : ''}{fmtFull(t.amount)}
+                  </td>
+                  <td>{t.reference || '—'}</td>
+                  <td className="center">
+                    {t.is_reconciled ? (
+                      <span className="je-badge je-posted">Reconciled</span>
+                    ) : (
+                      <button
+                        style={{ fontSize: '11px', padding: '2px 8px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        disabled={reconcilingId === t.id}
+                        onClick={() => reconcileOne(t.id)}
+                      >
+                        {reconcilingId === t.id ? '…' : 'Reconcile'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="acc-modal-actions">
+        <button className="acc-btn-cancel" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/* =============================================================================
    FINANCIAL REPORT PANEL
    Inline expandable panel rendered inside the Financial Reports sidebar card.
    Renders a different layout per report type:
@@ -551,7 +646,10 @@ function ReportPanel({ name, data, onClose }) {
         <Row label="Total Revenue" value={data.total_revenue} color="#16a34a" />
         <Row label="Total Expenses" value={data.total_expenses} color="#dc2626" />
         <Row label="Net Income" value={data.net_income} bold color={data.net_income >= 0 ? '#16a34a' : '#dc2626'} />
+        {data.revenue_items?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>REVENUE</div>}
         {data.revenue_items?.map(i => <Row key={i.account_code} label={`  ${i.account_code} ${i.account_name}`} value={i.balance} />)}
+        {data.expense_items?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>EXPENSES</div>}
+        {data.expense_items?.map(i => <Row key={i.account_code} label={`  ${i.account_code} ${i.account_name}`} value={i.balance} />)}
       </>}
 
       {name === 'Balance Sheet' && <>
@@ -561,6 +659,12 @@ function ReportPanel({ name, data, onClose }) {
         <Row label="Total Equity" value={data.total_equity} />
         <Row label="Net Income" value={data.net_income} />
         <Row label="Liabilities + Equity" value={data.liabilities_and_equity} bold />
+        {data.asset_items?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>ASSETS</div>}
+        {data.asset_items?.map(i => <Row key={i.account_code} label={`  ${i.account_code} ${i.account_name}`} value={i.balance} />)}
+        {data.liability_items?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>LIABILITIES</div>}
+        {data.liability_items?.map(i => <Row key={i.account_code} label={`  ${i.account_code} ${i.account_name}`} value={i.balance} />)}
+        {data.equity_items?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>EQUITY</div>}
+        {data.equity_items?.map(i => <Row key={i.account_code} label={`  ${i.account_code} ${i.account_name}`} value={i.balance} />)}
       </>}
 
       {name === 'Trial Balance' && <>
@@ -579,6 +683,10 @@ function ReportPanel({ name, data, onClose }) {
         {data.inflows?.length === 0 && data.outflows?.length === 0 && (
           <div style={{ color: '#9ca3af', fontSize: '12px', padding: '8px 0' }}>No bank transactions imported yet.</div>
         )}
+        {data.inflows?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>INFLOWS</div>}
+        {data.inflows?.map((i, idx) => <Row key={`in-${idx}`} label={`  ${i.account_code} ${i.account_name}`} value={i.credit} color="#16a34a" />)}
+        {data.outflows?.length > 0 && <div style={{ fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginTop: '8px' }}>OUTFLOWS</div>}
+        {data.outflows?.map((i, idx) => <Row key={`out-${idx}`} label={`  ${i.account_code} ${i.account_name}`} value={i.debit} color="#dc2626" />)}
       </>}
     </div>
   );
@@ -603,6 +711,7 @@ export default function Accounting({ goPage }) {
   const [modal, setModal]       = useState(null);
   const [jeDetail, setJeDetail] = useState(null);
   const [report, setReport]     = useState(null);
+  const [viewBank, setViewBank] = useState(null);
 
   const [kpis, setKpis]               = useState(null);
   const [accounts, setAccounts]       = useState([]);
@@ -631,6 +740,16 @@ export default function Accounting({ goPage }) {
     } finally {
       setLoading(false);
     }
+    // Report panels cache their data on first open (see loadReport) — once
+    // any mutating action refreshes the page (posting an entry, importing a
+    // statement, reconciling, closing a period), that cache goes stale.
+    // Clear it so the next click on a report re-fetches current numbers,
+    // and refresh one that's already open right now.
+    setReportData({});
+    setReport(current => {
+      if (current) loadReport(current);
+      return current;
+    });
   }, []);
 
   async function reconcileAll(bankId) {
@@ -698,6 +817,7 @@ export default function Accounting({ goPage }) {
       {modal === 'close'    && <ClosePeriodModal  onClose={() => setModal(null)} onClosed={loadAll} />}
       {modal === 'account'  && <NewAccountModal   onClose={() => setModal(null)} onSaved={loadAll} />}
       {jeDetail && <JeDetailModal entry={jeDetail} onClose={() => setJeDetail(null)} onPost={loadAll} />}
+      {viewBank && <BankTransactionsModal bank={viewBank} onClose={() => setViewBank(null)} onChanged={loadAll} />}
 
       <Sidebar activePage="accounting" goPage={goPage} />
       <div className="db-main">
@@ -841,21 +961,29 @@ export default function Accounting({ goPage }) {
                   return (
                     <div key={b.id} className="bank-item">
                       <div className={`bank-icon ${iconCls}`}>{icon}</div>
-                      <div className="bank-info">
+                      <div className="bank-info" style={{ cursor: 'pointer' }} onClick={() => setViewBank(b)}>
                         <div className="bank-name">{b.name}</div>
                         <div className="bank-date">{lastDate} · {b.unreconciled_count} unreconciled</div>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                         <span className={`bank-status ${badgeCls}`} style={{ textTransform: 'capitalize' }}>{s}</span>
-                        {b.unreconciled_count > 0 && (
+                        <div style={{ display: 'flex', gap: '6px' }}>
                           <button
-                            style={{ fontSize: '11px', padding: '2px 8px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                            disabled={reconcilingId === b.id}
-                            onClick={() => reconcileAll(b.id)}
+                            style={{ fontSize: '11px', padding: '2px 8px', background: '#fff', color: '#374151', border: '1px solid #e5e7eb', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                            onClick={() => setViewBank(b)}
                           >
-                            {reconcilingId === b.id ? 'Reconciling…' : 'Reconcile All'}
+                            View
                           </button>
-                        )}
+                          {b.unreconciled_count > 0 && (
+                            <button
+                              style={{ fontSize: '11px', padding: '2px 8px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              disabled={reconcilingId === b.id}
+                              onClick={() => reconcileAll(b.id)}
+                            >
+                              {reconcilingId === b.id ? 'Reconciling…' : 'Reconcile All'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );

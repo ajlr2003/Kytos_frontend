@@ -180,6 +180,19 @@
   line-height: 1.5;
 }
 
+/* Inline link button (e.g. "Sign in" / "Create account" switch) */
+.login-link-btn {
+  background: none;
+  border: none;
+  color: #1E6D2F;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.login-link-btn:hover { opacity: 0.8; }
+
 /* Footer */
 .login-footer {
   font-size: 12px;

@@ -1,6 +1,8 @@
 /* ══════════════════════════
    AI COPILOT PAGE
 ══════════════════════════ */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 #aico-page {
   display: flex;
   min-height: 100vh;
@@ -41,8 +43,8 @@
 }
 .aico-tab:hover { color: #374151; }
 .aico-tab.active {
-  color: #2563eb;
-  border-bottom-color: #2563eb;
+  color: #074E3B;
+  border-bottom-color: #074E3B;
 }
 .aico-tab svg { flex-shrink: 0; }
 
@@ -91,7 +93,7 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #7c3aed, #a78bfa);
+  background: linear-gradient(135deg, #074E3B, #10b981);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -104,7 +106,7 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, #053b2c, #15803d);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -139,7 +141,7 @@
   border-radius: 2px 12px 12px 12px;
 }
 .aico-bubble.user {
-  background: #2563eb;
+  background: #074E3B;
   color: #fff;
   border-radius: 12px 2px 12px 12px;
 }
@@ -212,11 +214,11 @@
 }
 .aico-action-btn:hover { background: #f3f4f6; }
 .aico-action-btn.primary {
-  background: #2563eb;
+  background: #074E3B;
   color: #fff;
-  border-color: #2563eb;
+  border-color: #074E3B;
 }
-.aico-action-btn.primary:hover { background: #1d4ed8; }
+.aico-action-btn.primary:hover { background: #053b2c; }
 
 /* ── Input area ── */
 .aico-input-wrap {
@@ -239,14 +241,14 @@
   line-height: 1.4;
   transition: border-color 0.15s;
 }
-.aico-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.aico-input:focus { border-color: #074E3B; box-shadow: 0 0 0 3px rgba(7,78,59,.10); }
 .aico-input::placeholder { color: #9ca3af; }
 
 .aico-send {
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  background: #2563eb;
+  background: #074E3B;
   border: none;
   color: #fff;
   display: flex;
@@ -256,7 +258,7 @@
   flex-shrink: 0;
   transition: background 0.12s, opacity 0.12s;
 }
-.aico-send:hover:not(:disabled) { background: #1d4ed8; }
+.aico-send:hover:not(:disabled) { background: #053b2c; }
 .aico-send:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .aico-input-hint {
@@ -320,7 +322,7 @@
   line-height: 1.4;
 }
 .aico-suggest:last-child { margin-bottom: 0; }
-.aico-suggest:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.aico-suggest:hover { background: #ecfef6; border-color: #bbf7d0; color: #053b2c; }
 
 /* Active context */
 .aico-ctx-row {
@@ -352,3 +354,115 @@
   transition: background 0.12s;
 }
 .aico-ctx-btn:hover { background: #f3f4f6; }
+
+/* ── New Chat button (topbar) ── */
+.aico-newchat-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  background: #074E3B;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.aico-newchat-btn:hover { background: #053b2c; }
+
+/* ── Tab item counts ── */
+.aico-tab-count {
+  background: #ecfef6;
+  color: #074E3B;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 2px;
+}
+
+/* ── Result card accent borders (matches app's status-color language) ── */
+.aico-card { border-left: 3px solid #e5e7eb; }
+.aico-card-red    { border-left-color: #dc2626; }
+.aico-card-orange { border-left-color: #ea580c; }
+.aico-card-green  { border-left-color: #16a34a; }
+
+/* ── Empty state text ── */
+.aico-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  line-height: 1.5;
+  padding: 10px 0;
+}
+
+/* ── History / Saved Prompts row ── */
+.aico-hist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.aico-hist-row:hover { border-color: #bbf7d0; background: #f8fffc; }
+.aico-hist-title { font-size: 13.5px; font-weight: 600; color: #111827; margin-bottom: 2px; }
+.aico-hist-meta { font-size: 12px; color: #9ca3af; }
+.aico-hist-del {
+  background: #fef2f2;
+  color: #dc2626;
+  border: none;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.aico-hist-del:hover { background: #fee2e2; }
+
+/* ── Prompt / context edit forms ── */
+.aico-prompt-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #f3f4f6;
+}
+.aico-prompt-form input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: #111827;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+.aico-prompt-form input:focus { border-color: #074E3B; box-shadow: 0 0 0 3px rgba(7,78,59,.10); }
+
+/* ── Quick Actions grid ── */
+.aico-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.aico-quick-card {
+  text-align: left;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px 18px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.aico-quick-card:hover { border-color: #bbf7d0; box-shadow: 0 2px 10px rgba(7,78,59,.08); }
+.aico-quick-card-prompt { background: #f8fffc; }
+.aico-quick-title { font-size: 14px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+.aico-quick-desc { font-size: 12.5px; color: #9ca3af; }

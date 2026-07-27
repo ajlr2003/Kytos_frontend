@@ -13,6 +13,9 @@
  * Requires `.sb`, `.sb-*`, `.ni`, and `.ni.active` CSS classes from shared.css.
  */
 
+import { useState, useEffect } from 'react';
+import { API_BASE } from '../../config.js';
+
 /* ─── Navigation item definitions ──────────────────────────────── */
 const NAV_ITEMS = [
   {
@@ -105,6 +108,19 @@ const NAV_ITEMS = [
     ),
   },
   {
+    key: 'contracts',
+    label: 'Contracts',
+    icon: (
+      <svg viewBox="0 0 24 24">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <path d="M9.5 15.5c0 .83.9 1.5 2 1.5s2-.67 2-1.5-.9-1.5-2-1.5-2-.67-2-1.5.9-1.5 2-1.5 2 .67 2 1.5"/>
+        <line x1="11.5" y1="11" x2="11.5" y2="12"/>
+        <line x1="11.5" y1="17.5" x2="11.5" y2="18.5"/>
+      </svg>
+    ),
+  },
+  {
     key: 'expenses',
     label: 'Expenses',
     icon: (
@@ -149,9 +165,36 @@ const NAV_ITEMS = [
   },
 ];
 
+const USERS_NAV_ITEM = {
+  key: 'users',
+  label: 'Users',
+  icon: (
+    <svg viewBox="0 0 24 24">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>
+  ),
+};
+
 /* ─── Component ─────────────────────────────────────────────────── */
 
-export default function Sidebar({ activePage, goPage, extraNav }) {
+export default function Sidebar({ activePage, goPage, extraNav, subNavGroups }) {
+  const [openGroup, setOpenGroup] = useState(subNavGroups?.[0]?.key ?? null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    fetch(`${API_BASE}/api/v1/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(u => { if (u?.role === 'admin') setIsAdmin(true); })
+      .catch(() => {});
+  }, []);
+
+  const navItems = isAdmin ? [...NAV_ITEMS, USERS_NAV_ITEM] : NAV_ITEMS;
+
   return (
     <div className="sb">
       {/* ── Brand / Logo ── */}
@@ -171,21 +214,67 @@ export default function Sidebar({ activePage, goPage, extraNav }) {
 
       {/* ── Navigation ── */}
       <nav className="sb-nav">
-        {NAV_ITEMS.map(item => (
-          <a
-            key={item.key}
-            className={`ni${activePage === item.key ? ' active' : ''}`}
-            href="#"
-            onClick={e => { e.preventDefault(); goPage(item.key); }}
-          >
-            {item.icon}
-            {item.label}
-          </a>
+        {navItems.map(item => (
+          <div key={item.key}>
+            <a
+              className={`ni${activePage === item.key ? ' active' : ''}`}
+              href="#"
+              onClick={e => { e.preventDefault(); goPage(item.key); }}
+            >
+              {item.icon}
+              {item.label}
+            </a>
+            {activePage === item.key && subNavGroups && subNavGroups.length > 0 && (
+              <div className="sb-subnav">
+                {subNavGroups.map(group => (
+                  <div key={group.key}>
+                    <a
+                      className={`sb-navgroup${openGroup === group.key ? ' open' : ''}`}
+                      href="#"
+                      onClick={e => { e.preventDefault(); setOpenGroup(p => p === group.key ? null : group.key); }}
+                    >
+                      {group.label}
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </a>
+                    {openGroup === group.key && (
+                      <div className="sb-subnav2">
+                        {group.children.map(sub => (
+                          <a
+                            key={sub.label}
+                            className={`sb-navsub${sub.active ? ' active' : ''}`}
+                            href="#"
+                            onClick={e => { e.preventDefault(); sub.onClick(); }}
+                          >
+                            {sub.label}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         ))}
 
         {/* Extra items injected by the host page (e.g. sub-routes) */}
         {extraNav}
       </nav>
+
+      {/* ── Log out ── */}
+      <a
+        className="ni"
+        href="#"
+        onClick={e => {
+          e.preventDefault();
+          localStorage.removeItem('token');
+          window.location.reload();
+        }}
+        style={{ marginTop: 'auto', color: '#dc2626' }}
+      >
+        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Log Out
+      </a>
     </div>
   );
 }

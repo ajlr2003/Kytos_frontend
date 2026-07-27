@@ -1,69 +1,65 @@
 import { API_BASE } from '../config.js';
 /**
- * src/pages/Login.jsx
+ * src/pages/Signup.jsx
  *
- * Authentication page. Presents an email/password/role form, calls the
- * backend login endpoint, stores the JWT in localStorage, and invokes
- * the onLogin callback so App.jsx can unmount this page and show the dashboard.
+ * Self-service account creation. New accounts are always created with the
+ * lowest-privilege role (Viewer) by the backend — there is no role picker
+ * here on purpose, since /register no longer accepts a client-supplied role.
+ * An existing Admin must promote the account afterward from the Users screen.
  *
  * Token storage: localStorage key "token".
- * API endpoint:  POST /api/v1/auth/login/
+ * API endpoint:  POST /api/v1/auth/register/
  */
 
 import { useState } from 'react';
 import '../styles/Login.css';
 
-/* ─── Constants ─────────────────────────────────────────────────── */
-
-const ROLES = [
-  'Executive Management',
-  'Finance',
-  'Procurement',
-  'Sales',
-  'Operations',
-  'HR',
-  'IT',
-];
-
-/* ─── Component ─────────────────────────────────────────────────── */
-
 /**
- * @param {{ onLogin: () => void, onSwitchToSignup: () => void }} props
+ * @param {{ onSignup: () => void, onSwitchToLogin: () => void }} props
  */
-export default function Login({ onLogin, onSwitchToSignup }) {
+export default function Signup({ onSignup, onSwitchToLogin }) {
+  const [fullName, setFullName] = useState('');
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
-  const [role,     setRole]     = useState(ROLES[0]);
+  const [confirm,  setConfirm]  = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
+    if (password !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/login/`, {
+      const res = await fetch(`${API_BASE}/api/v1/auth/register/`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email, password }),
+        body:    JSON.stringify({ full_name: fullName, email, password }),
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.detail || data.message || 'Invalid credentials.');
+        const detail = data.detail;
+        const message = Array.isArray(detail)
+          ? detail.map(d => d.msg).join(' ')
+          : detail || 'Could not create your account.';
+        setError(message);
         return;
       }
 
       const data  = await res.json();
-      /* Backend may return the token under different key names */
       const token = data.token ?? data.access ?? data.access_token;
 
       if (token) {
         localStorage.setItem('token', token);
-        onLogin();
+        onSignup();
       } else {
-        setError('Login succeeded but no token was returned.');
+        setError('Account created but no session token was returned.');
       }
     } catch {
       setError('Network error. Please try again.');
@@ -88,11 +84,23 @@ export default function Login({ onLogin, onSwitchToSignup }) {
 
         <h1 className="login-title">KYTOS</h1>
         <p className="login-subtitle">Smart Management</p>
-        <p className="login-tagline">Secure Business Intelligence Access</p>
+        <p className="login-tagline">Create your account</p>
 
         {/* ── Form ── */}
         <form onSubmit={handleSubmit} className="login-form">
           {error && <div className="login-error">{error}</div>}
+
+          <div className="login-field">
+            <label>Full name</label>
+            <input
+              type="text"
+              value={fullName}
+              onChange={e => setFullName(e.target.value)}
+              placeholder="Jane Doe"
+              required
+              autoFocus
+            />
+          </div>
 
           <div className="login-field">
             <label>Email</label>
@@ -102,7 +110,6 @@ export default function Login({ onLogin, onSwitchToSignup }) {
               onChange={e => setEmail(e.target.value)}
               placeholder="you@example.com"
               required
-              autoFocus
             />
           </div>
 
@@ -112,37 +119,38 @@ export default function Login({ onLogin, onSwitchToSignup }) {
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="At least 8 characters"
               required
+              minLength={8}
             />
-            <div className="login-forgot">
-              <button type="button" onClick={() => {}}>Forgot password?</button>
-            </div>
           </div>
 
           <div className="login-field">
-            <label>Role</label>
-            <div className="login-select-wrap">
-              <select value={role} onChange={e => setRole(e.target.value)}>
-                {ROLES.map(r => <option key={r}>{r}</option>)}
-              </select>
-              <span className="login-select-arrow">▾</span>
-            </div>
+            <label>Confirm password</label>
+            <input
+              type="password"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              placeholder="••••••••"
+              required
+              minLength={8}
+            />
           </div>
 
           <button type="submit" className="login-btn" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading ? 'Creating account…' : 'Create account'}
           </button>
         </form>
 
         <p className="login-hint">
-          Access permissions are aligned with organisational roles and business controls.
+          New accounts start with view-only access. An administrator can grant
+          additional permissions once your account is created.
         </p>
 
         <p className="login-hint">
-          Don't have an account?{' '}
-          <button type="button" className="login-link-btn" onClick={onSwitchToSignup}>
-            Create one
+          Already have an account?{' '}
+          <button type="button" className="login-link-btn" onClick={onSwitchToLogin}>
+            Sign in
           </button>
         </p>
       </div>
