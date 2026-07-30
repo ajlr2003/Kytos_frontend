@@ -110,7 +110,10 @@ export default function Expenses({ goPage }) {
       <div className="db-main">
         {/* Topbar */}
         <div className="tb">
-          <span className="tb-title"></span>
+          <div className="tb-title tb-title-block">
+            <div>Expense Management</div>
+            <div className="tb-subtitle">Track employee expenses, manage approvals, and ensure policy compliance</div>
+          </div>
           <div className="tb-right">
             <div className="tb-bell"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
             <div className="tb-user">
@@ -123,7 +126,7 @@ export default function Expenses({ goPage }) {
         <div className="pg">
           {/* Header */}
           <div className="pg-header">
-            <div className="pg-header-left"><h1>Expense Management</h1><p>Track employee expenses, manage approvals, and ensure policy compliance</p></div>
+            <div className="pg-header-left"></div>
             <div className="pg-header-actions">
               <button className="btn-action btn-blue" onClick={() => setShowModal(true)}>
                 <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>

@@ -236,10 +236,10 @@ function Intelligence({ goPage }) {
         </>
       } />
       <div className="db-main">
-        <div className="tb"><span className="tb-title"></span><div className="tb-right"><div className="tb-bell"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div><div className="tb-user"><div className="tb-avatar" style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)' }}>SJ</div><div><div className="tb-uname">Sarah Johns</div><div className="tb-urole">Administrator</div></div></div></div></div>
+        <div className="tb"><div className="tb-title tb-title-block"><div>Intelligence Hub</div><div className="tb-subtitle">Live data checks, trend-based forecasts, and what-if scenarios</div></div><div className="tb-right"><div className="tb-bell"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div><div className="tb-user"><div className="tb-avatar" style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)' }}>SJ</div><div><div className="tb-uname">Sarah Johns</div><div className="tb-urole">Administrator</div></div></div></div></div>
         <div className="pg">
           <div className="pg-header">
-            <div className="pg-header-left"><h1>Intelligence Hub</h1><p>Live data checks, real trend-based forecasts, and a real-baseline what-if calculator — DEMO badges mark the few things with no real data source</p></div>
+            <div className="pg-header-left"></div>
             <div className="pg-header-actions">
               <button className="btn-action btn-green" onClick={() => document.getElementById('scenario-workspace')?.scrollIntoView({ behavior: 'smooth' })}><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run Simulation</button>
               <button className="btn-action btn-purple" onClick={() => showToast(revenueForecast ? `Next-month forecast: ${fmtMoney(revenueForecast.predicted)}` : 'Not enough order history yet to forecast')}><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Generate Forecast</button>

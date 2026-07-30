@@ -93,7 +93,10 @@ export default function Users({ goPage }) {
       <Sidebar activePage="users" goPage={goPage} />
       <div className="db-main">
         <div className="tb">
-          <span className="tb-title"></span>
+          <div className="tb-title tb-title-block">
+            <div>User Management</div>
+            <div className="tb-subtitle">Control who has access and what they're allowed to do</div>
+          </div>
           <div className="tb-right">
             <div className="tb-user">
               <div className="tb-avatar" style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)' }}>
@@ -105,13 +108,6 @@ export default function Users({ goPage }) {
         </div>
 
         <div className="pg">
-          <div className="pg-header">
-            <div className="pg-header-left">
-              <h1>User Management</h1>
-              <p>Control who has access and what they're allowed to do. New sign-ups start as Viewer — promote them here.</p>
-            </div>
-          </div>
-
           {forbidden && (
             <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 10, padding: '16px 20px', fontSize: 14 }}>
               You don't have permission to view this page. Only Admins can manage users.
