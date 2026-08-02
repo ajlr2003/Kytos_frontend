@@ -1259,7 +1259,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   const [deadline,         setDeadline]         = useState(nowAsDatetimeLocal);
   const [expectedArrival,  setExpectedArrival]  = useState('');
   const [arrivalConfirmation, setArrivalConfirmation] = useState(false);
-  const [items,            setItems]            = useState([{ product_name: '', quantity: 1, unit_of_measure: 'unit', unit_price: '' }]);
+  const [items,            setItems]            = useState([{ product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]);
   const [terms,            setTerms]            = useState('');
   const [step,             setStep]             = useState(0);
   const [saving,           setSaving]           = useState(false);
@@ -1297,10 +1297,8 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   function updateItem(i, field, value) {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
   }
-  function addItem()    { setItems(prev => [...prev, { product_name: '', quantity: 1, unit_of_measure: 'unit', unit_price: '' }]); }
+  function addItem()    { setItems(prev => [...prev, { product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]); }
   function removeItem(i) { setItems(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev); }
-
-  const untaxedAmount = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0);
 
   function validateStep(i) {
     if (i === 0 && !title.trim()) return 'Title is required.';
@@ -1347,7 +1345,9 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
           product_name:    it.product_name.trim(),
           quantity:        Number(it.quantity),
           unit_of_measure: it.unit_of_measure.trim() || 'unit',
-          ...(it.unit_price !== '' && it.unit_price != null && { target_unit_price: Number(it.unit_price) }),
+          ...(it.description.trim() && { description: it.description.trim() }),
+          ...(it.manufacturer_name.trim() && { manufacturer_name: it.manufacturer_name.trim() }),
+          ...(it.manufacturer_number.trim() && { manufacturer_number: it.manufacturer_number.trim() }),
         })),
       };
 
@@ -1481,10 +1481,11 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                 <thead>
                   <tr>
                     <th>Product</th>
+                    <th>Description</th>
+                    <th>Manufacturer Name</th>
+                    <th>Manufacturer Number</th>
                     <th className="center">Quantity</th>
                     <th>Unit</th>
-                    <th className="right">Unit Price</th>
-                    <th className="right">Amount</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -1492,10 +1493,11 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                   {items.map((it, i) => (
                     <tr key={i}>
                       <td><input type="text" placeholder="Product name" value={it.product_name} onChange={e => updateItem(i, 'product_name', e.target.value)} /></td>
+                      <td><input type="text" placeholder="Description" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} /></td>
+                      <td><input type="text" placeholder="Manufacturer name" value={it.manufacturer_name} onChange={e => updateItem(i, 'manufacturer_name', e.target.value)} /></td>
+                      <td><input type="text" placeholder="Manufacturer number" value={it.manufacturer_number} onChange={e => updateItem(i, 'manufacturer_number', e.target.value)} /></td>
                       <td className="center"><input type="number" min="1" value={it.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} style={{ textAlign:'center' }} /></td>
                       <td><input type="text" value={it.unit_of_measure} onChange={e => updateItem(i, 'unit_of_measure', e.target.value)} /></td>
-                      <td className="right"><input type="number" min="0" step="any" placeholder="0.00" value={it.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)} style={{ textAlign:'right' }} /></td>
-                      <td className="right nrfq-amount">{((Number(it.quantity)||0) * (Number(it.unit_price)||0)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                       <td>
                         <button className="nrfq-line-del" onClick={() => removeItem(i)} disabled={items.length === 1} title="Remove line">
                           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1523,15 +1525,10 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                 <div><span>Order Deadline</span><strong>{deadline ? new Date(deadline).toLocaleString() : '—'}</strong></div>
                 <div><span>Vendor Reference</span><strong>{vendorRef || '—'}</strong></div>
                 <div><span>Items</span><strong>{items.length}</strong></div>
-                <div><span>Untaxed Total</span><strong>{untaxedAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} SAR</strong></div>
               </div>
               <div className="nrfq-field" style={{ marginTop: '16px' }}>
                 <label>Terms &amp; Conditions</label>
                 <textarea rows={3} placeholder="Define your terms and conditions …" value={terms} onChange={e => setTerms(e.target.value)} />
-              </div>
-              <div className="nrfq-totals">
-                <div><span>Untaxed Amount:</span><strong>{untaxedAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} SAR</strong></div>
-                <div className="grand"><span>Total:</span><strong>{untaxedAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} SAR</strong></div>
               </div>
             </>
           )}
@@ -1552,7 +1549,6 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
             <div className="prd-section-title">Live Summary</div>
             <div className="wiz-summary-name">{title || 'Untitled RFQ'}</div>
             <div className="wiz-summary-ref">{selectedSuppliers.length} supplier{selectedSuppliers.length !== 1 ? 's' : ''} selected</div>
-            <div className="wiz-summary-price">{untaxedAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} <span>SAR</span></div>
             <div className="wiz-summary-row"><span>Items</span><strong>{items.length}</strong></div>
             <div className="wiz-summary-row"><span>Deadline</span><strong>{deadline ? new Date(deadline).toLocaleDateString() : '—'}</strong></div>
           </div>
