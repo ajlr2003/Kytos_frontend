@@ -232,11 +232,15 @@ function loadStages(projectId) {
   return DEFAULT_STAGES;
 }
 
-function ProjectDetailPage({ project, onBack, onUpdated, showToast }) {
+function ProjectDetailPage({ project, onBack, onUpdated, onTaskStatusOptimistic, showToast }) {
   const [tab, setTab]         = useState('tasks'); // tasks | milestones | time
   const [newMs, setNewMs]     = useState('');
   const [msDue, setMsDue]     = useState('');
   const [savingMs, setSavingMs] = useState(false);
+  const [tlHours, setTlHours] = useState('');
+  const [tlDate, setTlDate]   = useState(new Date().toISOString().slice(0, 10));
+  const [tlDesc, setTlDesc]   = useState('');
+  const [savingTl, setSavingTl] = useState(false);
   const [openOnlyFilter, setOpenOnlyFilter] = useState(true);
   const [taskSearch, setTaskSearch] = useState('');
   const [addingCol, setAddingCol] = useState(null); // stage key | null
@@ -270,10 +274,13 @@ function ProjectDetailPage({ project, onBack, onUpdated, showToast }) {
   }
 
   async function moveTask(taskId, newStatus) {
+    // Update the UI immediately rather than waiting on a network round-trip —
+    // only resync from the server if the request actually fails.
+    onTaskStatusOptimistic?.(taskId, newStatus);
     const res = await fetch(`${API_BASE}/api/v1/projects/tasks/${taskId}/status`, {
       method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status: newStatus }),
     });
-    if (res.ok) onUpdated();
+    if (!res.ok) { onUpdated(); showToast?.('Could not move task — please try again'); }
   }
 
   async function deleteTask(taskId) {
@@ -306,6 +313,19 @@ function ProjectDetailPage({ project, onBack, onUpdated, showToast }) {
   async function toggleMilestone(msId) {
     await fetch(`${API_BASE}/api/v1/projects/milestones/${msId}/toggle`, { method: 'POST', headers: authHeaders() });
     onUpdated();
+  }
+
+  async function logTime() {
+    if (!tlHours || parseFloat(tlHours) <= 0) { showToast?.('Enter valid hours.'); return; }
+    setSavingTl(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/time-logs`, {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ hours: parseFloat(tlHours), date: tlDate, description: tlDesc || undefined }),
+      });
+      if (res.ok) { setTlHours(''); setTlDesc(''); onUpdated(); showToast?.('Time logged'); }
+      else showToast?.((await res.json().catch(() => ({}))).detail || 'Could not log time');
+    } finally { setSavingTl(false); }
   }
 
   const lastStageKey = stages[stages.length - 1]?.key;
@@ -357,11 +377,13 @@ function ProjectDetailPage({ project, onBack, onUpdated, showToast }) {
 
       <div className="rfq-odoo-card">
         <div className="rfq-toolbar">
-          <div className="rfq-toolbar-btns">
-            <button className="btn-action btn-blue" onClick={() => { setTab('tasks'); setAddingCol(stages[0]?.key); setQuickTitle(''); }}>
-              <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New
-            </button>
-          </div>
+          {tab === 'tasks' && (
+            <div className="rfq-toolbar-btns">
+              <button className="btn-action btn-blue" onClick={() => { setAddingCol(stages[0]?.key); setQuickTitle(''); }}>
+                <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New
+              </button>
+            </div>
+          )}
           {tab === 'tasks' && (
             <div className="rfq-toolbar-search">
               {openOnlyFilter && (
@@ -530,6 +552,23 @@ function ProjectDetailPage({ project, onBack, onUpdated, showToast }) {
                 ))}</tbody>
               </table>
             ) : <div style={{fontSize:'13px',color:'#9ca3af',textAlign:'center',padding:'16px 0'}}>No time logged yet</div>}
+            <div style={{display:'flex',gap:'8px',marginTop:'12px',alignItems:'flex-end'}}>
+              <div style={{width:'110px'}}>
+                <label style={{fontSize:'11px',fontWeight:600,color:'#6b7280',display:'block',marginBottom:'4px'}}>Hours *</label>
+                <input type="number" step="0.5" min="0.5" style={{width:'100%',padding:'8px 10px',border:'1px solid #d1d5db',borderRadius:'8px',fontSize:'13px',boxSizing:'border-box'}} placeholder="e.g. 2.5" value={tlHours} onChange={e=>setTlHours(e.target.value)} />
+              </div>
+              <div style={{width:'150px'}}>
+                <label style={{fontSize:'11px',fontWeight:600,color:'#6b7280',display:'block',marginBottom:'4px'}}>Date</label>
+                <input type="date" style={{width:'100%',padding:'8px 10px',border:'1px solid #d1d5db',borderRadius:'8px',fontSize:'13px',boxSizing:'border-box'}} value={tlDate} onChange={e=>setTlDate(e.target.value)} />
+              </div>
+              <div style={{flex:1}}>
+                <label style={{fontSize:'11px',fontWeight:600,color:'#6b7280',display:'block',marginBottom:'4px'}}>Description</label>
+                <input style={{width:'100%',padding:'8px 10px',border:'1px solid #d1d5db',borderRadius:'8px',fontSize:'13px',boxSizing:'border-box'}} placeholder="What did you work on?" value={tlDesc} onChange={e=>setTlDesc(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logTime(); }} />
+              </div>
+              <button onClick={logTime} disabled={savingTl || !tlHours} className="nrfq-btn-primary" style={{padding:'8px 18px'}}>
+                {savingTl ? 'Logging…' : 'Log Time'}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -590,14 +629,22 @@ export default function Projects({ goPage }) {
   }
 
   async function refreshDetail(p) {
-    const res = await fetch(`${API_BASE}/api/v1/projects`, { headers: authHeaders() });
-    if (res.ok) {
-      const d = await res.json();
+    const [pRes, kRes] = await Promise.all([
+      fetch(`${API_BASE}/api/v1/projects`, { headers: authHeaders() }),
+      fetch(`${API_BASE}/api/v1/projects/kpis`, { headers: authHeaders() }),
+    ]);
+    if (pRes.ok) {
+      const d = await pRes.json();
       const fresh = (d.items || []).find(x => x.id === p.id);
       setDetail(fresh || p);
       setProjects(d.items || []);
     }
-    load();
+    if (kRes.ok) setKpis(await kRes.json());
+  }
+
+  function onTaskStatusOptimistic(taskId, newStatus) {
+    setDetail(prev => prev ? { ...prev, tasks: prev.tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t) } : prev);
+    setProjects(prev => prev.map(p => ({ ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, status: newStatus } : t) })));
   }
 
   const totalHours = projects.reduce((s, p) => s + (p.total_hours || 0), 0);
@@ -654,6 +701,7 @@ export default function Projects({ goPage }) {
             project={detail}
             onBack={() => setDetail(null)}
             onUpdated={() => refreshDetail(detail)}
+            onTaskStatusOptimistic={onTaskStatusOptimistic}
             showToast={showToast}
           />
           ) : (

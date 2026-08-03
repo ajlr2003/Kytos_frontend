@@ -17,6 +17,7 @@ import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
 import ActivityTimeline from '../components/ui/ActivityTimeline';
+import AuthedImage from '../components/ui/AuthedImage';
 import { NewProductPage, ProductDetailPage } from '../components/products/ProductPages';
 import { VendorPricelistFormPage } from '../components/products/VendorPricelistPages';
 import { AnalysisBarLineChart, AnalysisPieChart } from '../components/reports/AnalysisCharts';
@@ -1247,6 +1248,69 @@ function nowAsDatetimeLocal() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/* ── Catalog picker — pick a saved product (with photo) as an RFQ line ── */
+function CatalogPickerModal({ onClose, onPick }) {
+  const [products, setProducts] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [search,   setSearch]   = useState('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    fetch(`${API_BASE}/api/v1/inventory/items?limit=200`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : { items: [] })
+      .then(d => setProducts(d.items ?? []))
+      .catch(() => setProducts([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = products.filter(p =>
+    search === '' ||
+    p.part_number?.toLowerCase().includes(search.toLowerCase()) ||
+    p.description?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <Modal title="Catalog" onClose={onClose}>
+      <input
+        type="text"
+        placeholder="Search products…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', marginBottom: '14px' }}
+      />
+      {loading ? (
+        <div style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', padding: '30px 0' }}>Loading…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', padding: '30px 0' }}>
+          {products.length === 0 ? 'No products in the catalog yet — add some from Purchases → Products.' : 'No products match your search.'}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', maxHeight: '420px', overflowY: 'auto' }}>
+          {filtered.map(p => (
+            <div
+              key={p.id}
+              onClick={() => onPick(p)}
+              style={{ border: '1px solid #e5e7eb', borderRadius: '10px', padding: '10px', cursor: 'pointer', transition: 'box-shadow .15s' }}
+              onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,.1)'}
+              onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+            >
+              <div style={{ width: '100%', aspectRatio: '1', background: '#f9fafb', borderRadius: '8px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '8px' }}>
+                {p.image_url ? (
+                  <AuthedImage src={p.image_url} alt={p.part_number} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                )}
+              </div>
+              <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.part_number}</div>
+              {p.description && <div style={{ fontSize: '11px', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function NewRFQPage({ onCancel, onCreated, showToast }) {
   const [suppliersList,    setSuppliersList]    = useState([]);
   const [suppliersLoading, setSuppliersLoading]  = useState(true);
@@ -1259,11 +1323,12 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   const [deadline,         setDeadline]         = useState(nowAsDatetimeLocal);
   const [expectedArrival,  setExpectedArrival]  = useState('');
   const [arrivalConfirmation, setArrivalConfirmation] = useState(false);
-  const [items,            setItems]            = useState([{ product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]);
+  const [items,            setItems]            = useState([{ type: 'product', product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]);
   const [terms,            setTerms]            = useState('');
   const [step,             setStep]             = useState(0);
   const [saving,           setSaving]           = useState(false);
   const [error,            setError]            = useState('');
+  const [showCatalog,      setShowCatalog]      = useState(false);
 
   const STEPS = ['Vendor', 'Details', 'Items', 'Review'];
 
@@ -1297,16 +1362,32 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   function updateItem(i, field, value) {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
   }
-  function addItem()    { setItems(prev => [...prev, { product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]); }
+  function addItem()    { setItems(prev => [...prev, { type: 'product', product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]); }
+  function addNote()    { setItems(prev => [...prev, { type: 'note', text: '' }]); }
+  function pickFromCatalog(p) {
+    setItems(prev => [...prev, {
+      type: 'product',
+      product_name: p.part_number || p.description || '',
+      description: p.description || '',
+      manufacturer_name: p.supplier_manufacturer || '',
+      manufacturer_number: p.part_number || '',
+      quantity: 1,
+      unit_of_measure: 'unit',
+    }]);
+    setShowCatalog(false);
+    showToast('Added from catalog');
+  }
   function removeItem(i) { setItems(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev); }
 
   function validateStep(i) {
     if (i === 0 && !title.trim()) return 'Title is required.';
     if (i === 0 && selectedSuppliers.length === 0) return 'Please select at least one supplier.';
     if (i === 2) {
-      const invalidItem = items.find(it => !it.product_name.trim());
+      const productLines = items.filter(it => it.type !== 'note');
+      if (productLines.length === 0) return 'Add at least one product.';
+      const invalidItem = productLines.find(it => !it.product_name.trim());
       if (invalidItem) return 'All lines must have a product.';
-      const badQty = items.find(it => Number(it.quantity) <= 0);
+      const badQty = productLines.find(it => Number(it.quantity) <= 0);
       if (badQty) return 'All quantities must be greater than 0.';
     }
     return '';
@@ -1322,9 +1403,11 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   async function submit() {
     if (!title.trim()) { setError('Title is required.'); setStep(0); return; }
     if (selectedSuppliers.length === 0) { setError('Please select at least one supplier.'); setStep(0); return; }
-    const invalidItem = items.find(it => !it.product_name.trim());
+    const productLines = items.filter(it => it.type !== 'note');
+    if (productLines.length === 0) { setError('Add at least one product.'); setStep(2); return; }
+    const invalidItem = productLines.find(it => !it.product_name.trim());
     if (invalidItem) { setError('All lines must have a product.'); setStep(2); return; }
-    const badQty = items.find(it => Number(it.quantity) <= 0);
+    const badQty = productLines.find(it => Number(it.quantity) <= 0);
     if (badQty) { setError('All quantities must be greater than 0.'); setStep(2); return; }
 
     setSaving(true);
@@ -1333,15 +1416,20 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
       const token = localStorage.getItem('token');
       if (!token) { setError('Not authenticated. Please log in.'); return; }
 
+      // Note lines have no backend concept of their own — fold their text
+      // into the RFQ's overall description, in the order they were added.
+      const noteText = items.filter(it => it.type === 'note' && it.text.trim()).map(it => it.text.trim()).join('\n');
+      const fullDescription = [description.trim(), noteText].filter(Boolean).join('\n\n');
+
       const payload = {
         title: title.trim(),
-        ...(description.trim() && { description: description.trim() }),
+        ...(fullDescription && { description: fullDescription }),
         ...(vendorRef.trim() && { customer_reference: vendorRef.trim() }),
         ...(crmLeadId && { crm_lead_id: crmLeadId }),
         ...(deadline && { deadline: deadline.split('T')[0] }),
         currency: 'SAR',
         supplier_ids: selectedSuppliers,
-        items: items.map(it => ({
+        items: productLines.map(it => ({
           product_name:    it.product_name.trim(),
           quantity:        Number(it.quantity),
           unit_of_measure: it.unit_of_measure.trim() || 'unit',
@@ -1370,6 +1458,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
 
   return (
     <div className="nrfq-page">
+      {showCatalog && <CatalogPickerModal onClose={() => setShowCatalog(false)} onPick={pickFromCatalog} />}
       <div className="nrfq-actionbar">
         <button className="nrfq-btn-ghost" onClick={onCancel}>← Back to RFQs</button>
       </div>
@@ -1490,7 +1579,24 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((it, i) => (
+                  {items.map((it, i) => it.type === 'note' ? (
+                    <tr key={i}>
+                      <td colSpan={6}>
+                        <input
+                          type="text"
+                          placeholder="Note — visible on the RFQ, not tied to a specific product"
+                          value={it.text}
+                          onChange={e => updateItem(i, 'text', e.target.value)}
+                          style={{ fontStyle: 'italic', color: '#6b7280' }}
+                        />
+                      </td>
+                      <td>
+                        <button className="nrfq-line-del" onClick={() => removeItem(i)} disabled={items.length === 1} title="Remove note">
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                      </td>
+                    </tr>
+                  ) : (
                     <tr key={i}>
                       <td><input type="text" placeholder="Product name" value={it.product_name} onChange={e => updateItem(i, 'product_name', e.target.value)} /></td>
                       <td><input type="text" placeholder="Description" value={it.description} onChange={e => updateItem(i, 'description', e.target.value)} /></td>
@@ -1510,8 +1616,8 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
               <div className="nrfq-add-links">
                 <span onClick={addItem}>Add a product</span>
                 <span onClick={() => showToast('Sections coming soon')}>Add a section</span>
-                <span onClick={() => showToast('Notes coming soon')}>Add a note</span>
-                <span onClick={() => showToast('Catalog coming soon')}>Catalog</span>
+                <span onClick={addNote}>Add a note</span>
+                <span onClick={() => setShowCatalog(true)}>Catalog</span>
               </div>
             </>
           )}
