@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { API_BASE } from '../config.js';
 import Sidebar from '../components/layout/Sidebar';
 import Modal  from '../components/ui/Modal';
+import { ConfigListModal, GeneralSettingsModal } from '../components/config/ConfigModals';
 import Toast  from '../components/ui/Toast';
 import { AnalysisBarLineChart, AnalysisPieChart } from '../components/reports/AnalysisCharts';
 
@@ -583,6 +584,7 @@ export default function Projects({ goPage }) {
   const [loading,   setLoading]   = useState(true);
   const [toast,     setToast]     = useState(null);
   const [modal,     setModal]     = useState(null); // 'project' | 'task' | 'time'
+  const [configModal, setConfigModal] = useState(null); // { listType, title } | 'settings' | null
   const [detail,    setDetail]    = useState(null);
   const [activeTab, setActiveTab] = useState('projects'); // projects | tasks | reporting
   const [taskSearch, setTaskSearch] = useState('');
@@ -652,6 +654,10 @@ export default function Projects({ goPage }) {
   return (
     <div id="projects-page">
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {configModal === 'settings' && <GeneralSettingsModal onClose={() => setConfigModal(null)} showToast={showToast} />}
+      {configModal && configModal !== 'settings' && (
+        <ConfigListModal listType={configModal.listType} title={configModal.title} onClose={() => setConfigModal(null)} showToast={showToast} />
+      )}
 
       {modal === 'project' && <NewProjectModal onClose={() => setModal(null)} onSaved={onProjectSaved} />}
       {modal === 'task'    && <AddTaskModal projects={projects} onClose={() => setModal(null)} onSaved={onTaskSaved} />}
@@ -680,8 +686,8 @@ export default function Projects({ goPage }) {
           },
           {
             key: 'config', label: 'Configuration', children: [
-              { label: 'Settings', onClick: () => showToast('Settings coming soon') },
-              { label: 'Tags',     onClick: () => showToast('Tags coming soon') },
+              { label: 'Settings', onClick: () => setConfigModal('settings') },
+              { label: 'Tags',     onClick: () => setConfigModal({ listType: 'project_tag', title: 'Project Tags' }) },
             ],
           },
         ]}

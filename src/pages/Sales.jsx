@@ -28,6 +28,7 @@ import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHand
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
+import { ConfigListModal, GeneralSettingsModal } from '../components/config/ConfigModals';
 import ActivityTimeline from '../components/ui/ActivityTimeline';
 import { CURRENCY_SYMBOLS, LINE_ITEM_UNITS, PRODUCT_ICON_COLORS }
   from '../constants';
@@ -1299,6 +1300,7 @@ export default function Sales({ goPage, onLogout }) {
   const [showTaskInput, setShowTaskInput]   = useState(false);
   const [discountRules, setDiscountRules]   = useState([]);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
+  const [configModal, setConfigModal] = useState(null); // { listType, title } | 'settings' | null
 
   function getToken() { return localStorage.getItem('token'); }
 
@@ -1318,6 +1320,20 @@ export default function Sales({ goPage, onLogout }) {
 
   function showToast(msg) { setToast(msg); }
   function toggleKpi(k)   { setOpenKpi(p => p === k ? null : k); }
+
+  function exportReportCsv(buckets, sheetLabel) {
+    if (!buckets?.length) { showToast('No data to export'); return; }
+    const rows = [['Label', 'Count', 'Total'], ...buckets.map(b => [b.label, b.count ?? '', b.total ?? ''])];
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sheetLabel.replace(/\s+/g, '_').toLowerCase()}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Exported to CSV');
+  }
 
   useEffect(() => {
     fetchDiscountRules();
@@ -1670,6 +1686,10 @@ export default function Sales({ goPage, onLogout }) {
   return (
     <div id="sales-page">
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {configModal === 'settings' && <GeneralSettingsModal onClose={() => setConfigModal(null)} showToast={showToast} />}
+      {configModal && configModal !== 'settings' && (
+        <ConfigListModal listType={configModal.listType} title={configModal.title} onClose={() => setConfigModal(null)} showToast={showToast} />
+      )}
 
       {discountQuote && <ApplyDiscountModal quote={discountQuote} onClose={() => setDiscountQuote(null)} onSave={showToast} />}
       {orderDetail   && (
@@ -1729,9 +1749,9 @@ export default function Sales({ goPage, onLogout }) {
           },
           {
             key: 'config', label: 'Configuration', children: [
-              { label: 'Settings',        onClick: () => showToast('Settings coming soon') },
-              { label: 'Payment Terms',   onClick: () => showToast('Payment terms coming soon') },
-              { label: 'Discount Rules',  onClick: () => showToast('Discount rules coming soon') },
+              { label: 'Settings',        onClick: () => setConfigModal('settings') },
+              { label: 'Payment Terms',   onClick: () => setConfigModal({ listType: 'payment_terms', title: 'Payment Terms' }) },
+              { label: 'Discount Rules',  onClick: () => setShowDiscountModal(true) },
             ],
           },
         ]}
@@ -1853,10 +1873,6 @@ export default function Sales({ goPage, onLogout }) {
                     <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                     <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
                   </div>
-                  <div className="rfq-view-icons">
-                    <button className="active" title="Kanban"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
-                    <button title="List" onClick={() => showToast('List view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                  </div>
                 </div>
 
                 <div className="prd-kanban">
@@ -1911,10 +1927,6 @@ export default function Sales({ goPage, onLogout }) {
                   </div>
                   <div className="rfq-pagination">
                     <span>{derivedCustomers.length === 0 ? '0-0' : `1-${derivedCustomers.length}`} / {derivedCustomers.length}</span>
-                  </div>
-                  <div className="rfq-view-icons">
-                    <button className="active" title="List"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                    <button title="Kanban" onClick={() => showToast('Kanban view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
                   </div>
                 </div>
 
@@ -1983,10 +1995,6 @@ export default function Sales({ goPage, onLogout }) {
                     <input type="text" placeholder="Search…" />
                   </div>
                 )}
-                <div className="rfq-view-icons">
-                  <button className="active" title="Graph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></button>
-                  <button title="Pivot" onClick={() => showToast('Pivot view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg></button>
-                </div>
               </div>
 
               <div className="rpt-toolbar2">
@@ -2003,7 +2011,7 @@ export default function Sales({ goPage, onLogout }) {
                     </div>
                   )}
                 </div>
-                <button className="rpt-spreadsheet-btn" onClick={() => showToast('Insert in Spreadsheet coming soon')}>Insert in Spreadsheet</button>
+                <button className="rpt-spreadsheet-btn" onClick={() => exportReportCsv(activeReport.buckets, `Sales ${reportSubTab} report`)}>Export CSV</button>
                 <div className="rpt-icon-group">
                   <button className={reportChartType === 'bar' ? 'active' : ''} title="Bar chart" onClick={() => setReportChartType('bar')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></button>
                   <button className={reportChartType === 'line' ? 'active' : ''} title="Line chart" onClick={() => setReportChartType('line')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 17 9 11 13 15 21 6"/></svg></button>
@@ -2129,10 +2137,6 @@ export default function Sales({ goPage, onLogout }) {
                       <span>{filtered.length === 0 ? '0-0' : `1-${filtered.length}`} / {quotes.length}</span>
                       <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                       <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
-                    </div>
-                    <div className="rfq-view-icons">
-                      <button className="active" title="List"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                      <button title="Kanban" onClick={() => showToast('Kanban view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
                     </div>
                   </div>
 
@@ -2366,10 +2370,6 @@ export default function Sales({ goPage, onLogout }) {
                   <span>{orders.length === 0 ? '0-0' : `1-${orders.length}`} / {orders.length}</span>
                   <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                   <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
-                </div>
-                <div className="rfq-view-icons">
-                  <button className="active" title="List"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                  <button title="Kanban" onClick={() => showToast('Kanban view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
                 </div>
               </div>
 

@@ -21,6 +21,7 @@ import AuthedImage from '../components/ui/AuthedImage';
 import { NewProductPage, ProductDetailPage } from '../components/products/ProductPages';
 import { VendorPricelistFormPage } from '../components/products/VendorPricelistPages';
 import { AnalysisBarLineChart, AnalysisPieChart } from '../components/reports/AnalysisCharts';
+import { ConfigListModal, GeneralSettingsModal } from '../components/config/ConfigModals';
 import '../styles/Purchases.css';
 
 /* ─── API response → display shape ─── */
@@ -1364,6 +1365,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   }
   function addItem()    { setItems(prev => [...prev, { type: 'product', product_name: '', description: '', manufacturer_name: '', manufacturer_number: '', quantity: 1, unit_of_measure: 'unit' }]); }
   function addNote()    { setItems(prev => [...prev, { type: 'note', text: '' }]); }
+  function addSection() { setItems(prev => [...prev, { type: 'section', text: '' }]); }
   function pickFromCatalog(p) {
     setItems(prev => [...prev, {
       type: 'product',
@@ -1383,7 +1385,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
     if (i === 0 && !title.trim()) return 'Title is required.';
     if (i === 0 && selectedSuppliers.length === 0) return 'Please select at least one supplier.';
     if (i === 2) {
-      const productLines = items.filter(it => it.type !== 'note');
+      const productLines = items.filter(it => it.type === 'product');
       if (productLines.length === 0) return 'Add at least one product.';
       const invalidItem = productLines.find(it => !it.product_name.trim());
       if (invalidItem) return 'All lines must have a product.';
@@ -1403,7 +1405,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   async function submit() {
     if (!title.trim()) { setError('Title is required.'); setStep(0); return; }
     if (selectedSuppliers.length === 0) { setError('Please select at least one supplier.'); setStep(0); return; }
-    const productLines = items.filter(it => it.type !== 'note');
+    const productLines = items.filter(it => it.type === 'product');
     if (productLines.length === 0) { setError('Add at least one product.'); setStep(2); return; }
     const invalidItem = productLines.find(it => !it.product_name.trim());
     if (invalidItem) { setError('All lines must have a product.'); setStep(2); return; }
@@ -1596,6 +1598,23 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                         </button>
                       </td>
                     </tr>
+                  ) : it.type === 'section' ? (
+                    <tr key={i} style={{ background: '#f9fafb' }}>
+                      <td colSpan={6}>
+                        <input
+                          type="text"
+                          placeholder="Section title — groups the lines below it (e.g. Electrical)"
+                          value={it.text}
+                          onChange={e => updateItem(i, 'text', e.target.value)}
+                          style={{ fontWeight: 700, color: '#111827' }}
+                        />
+                      </td>
+                      <td>
+                        <button className="nrfq-line-del" onClick={() => removeItem(i)} disabled={items.length === 1} title="Remove section">
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                      </td>
+                    </tr>
                   ) : (
                     <tr key={i}>
                       <td><input type="text" placeholder="Product name" value={it.product_name} onChange={e => updateItem(i, 'product_name', e.target.value)} /></td>
@@ -1615,7 +1634,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
               </table>
               <div className="nrfq-add-links">
                 <span onClick={addItem}>Add a product</span>
-                <span onClick={() => showToast('Sections coming soon')}>Add a section</span>
+                <span onClick={addSection}>Add a section</span>
                 <span onClick={addNote}>Add a note</span>
                 <span onClick={() => setShowCatalog(true)}>Catalog</span>
               </div>
@@ -1932,6 +1951,7 @@ function NewVendorPage({ onCancel, onCreated, showToast }) {
 export default function Purchases({ goPage }) {
   const [activeNav, setActiveNav]   = useState('RFQs');
   const [modal, setModal]           = useState(null); // 'po'|'rfq'
+  const [configModal, setConfigModal] = useState(null); // { listType, title } | 'settings' | null
   const [rfqPageOpen, setRfqPageOpen] = useState(false);
   const [showNewProduct, setShowNewProduct] = useState(false);
   const [showNewVendor, setShowNewVendor] = useState(false);
@@ -2155,6 +2175,20 @@ export default function Purchases({ goPage }) {
 
   function showToast(msg) { setToast(msg); }
 
+  function exportReportCsv(buckets, sheetLabel) {
+    if (!buckets?.length) { showToast('No data to export'); return; }
+    const rows = [['Label', 'Count', 'Total'], ...buckets.map(b => [b.label, b.count ?? '', b.total ?? ''])];
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sheetLabel.replace(/\s+/g, '_').toLowerCase()}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Exported to CSV');
+  }
+
   function handleRFQAction(rfq) {
     if (rfq.action === 'Create PO') {
       setCreatePOPrefill({ supplier: 'TechSupply Co.', item: rfq.desc });
@@ -2284,6 +2318,10 @@ export default function Purchases({ goPage }) {
   return (
     <div id="purchases-page">
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {configModal === 'settings' && <GeneralSettingsModal onClose={() => setConfigModal(null)} showToast={showToast} />}
+      {configModal && configModal !== 'settings' && (
+        <ConfigListModal listType={configModal.listType} title={configModal.title} onClose={() => setConfigModal(null)} showToast={showToast} />
+      )}
       {modal === 'po'  && <CreatePOModal  onClose={() => { setModal(null); setCreatePOPrefill(null); }} onSave={showToast} prefill={createPOPrefill} />}
       {showGRNModal && <CreateGRNModal onClose={() => setShowGRNModal(false)} onSuccess={() => { fetchGRNs(); showToast('GRN created successfully'); }} />}
       {selectedPO && <PODetailModal po={selectedPO} onClose={() => setSelectedPO(null)} />}
@@ -2325,11 +2363,11 @@ export default function Purchases({ goPage }) {
           },
           {
             key: 'config', label: 'Configuration', children: [
-              { label: 'Settings',           onClick: () => showToast('Settings coming soon') },
+              { label: 'Settings',           onClick: () => setConfigModal('settings') },
               { label: 'Vendor Pricelists',  active: activeNav === 'Vendor Pricelists', onClick: () => { setRfqPageOpen(false); setActiveNav('Vendor Pricelists'); } },
-              { label: 'Product Categories', onClick: () => showToast('Product categories coming soon') },
-              { label: 'Units of Measure',   onClick: () => showToast('Units of measure coming soon') },
-              { label: 'Packagings',         onClick: () => showToast('Packagings coming soon') },
+              { label: 'Product Categories', onClick: () => setConfigModal({ listType: 'product_category', title: 'Product Categories' }) },
+              { label: 'Units of Measure',   onClick: () => setConfigModal({ listType: 'unit_of_measure', title: 'Units of Measure' }) },
+              { label: 'Packagings',         onClick: () => setConfigModal({ listType: 'packaging', title: 'Packagings' }) },
             ],
           },
         ]}
@@ -2437,14 +2475,6 @@ export default function Purchases({ goPage }) {
                         <span>{combinedRows.length === 0 ? '0-0' : `1-${combinedRows.length}`} / {combinedRows.length}</span>
                         <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                         <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
-                      </div>
-                      <div className="rfq-view-icons">
-                        <button className="active" title="List"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                        <button title="Kanban" onClick={() => showToast('Kanban view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
-                        <button title="Pivot" onClick={() => showToast('Pivot view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg></button>
-                        <button title="Graph" onClick={() => showToast('Graph view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></button>
-                        <button title="Calendar" onClick={() => showToast('Calendar view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>
-                        <button title="Activity" onClick={() => showToast('Activity view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
                       </div>
                     </div>
 
@@ -2734,10 +2764,6 @@ export default function Purchases({ goPage }) {
                       <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                       <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
                     </div>
-                    <div className="rfq-view-icons">
-                      <button className="active" title="List"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
-                      <button title="Kanban" onClick={() => showToast('Kanban view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
-                    </div>
                   </div>
 
                   <table className="rfq-odoo-table">
@@ -2800,10 +2826,6 @@ export default function Purchases({ goPage }) {
                       <span>{visibleProducts.length === 0 ? '0-0' : `1-${visibleProducts.length}`} / {products.length}</span>
                       <button onClick={() => showToast('First page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg></button>
                       <button onClick={() => showToast('Next page')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg></button>
-                    </div>
-                    <div className="rfq-view-icons">
-                      <button className="active" title="Kanban"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="10" rx="1"/></svg></button>
-                      <button title="List" onClick={() => showToast('List view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
                     </div>
                   </div>
 
@@ -2900,10 +2922,6 @@ export default function Purchases({ goPage }) {
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                       <input type="text" placeholder="Search…" />
                     </div>
-                    <div className="rfq-view-icons">
-                      <button className="active" title="Graph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></button>
-                      <button title="Pivot" onClick={() => showToast('Pivot view coming soon')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg></button>
-                    </div>
                   </div>
 
                   <div className="rpt-toolbar2">
@@ -2920,7 +2938,7 @@ export default function Purchases({ goPage }) {
                         </div>
                       )}
                     </div>
-                    <button className="rpt-spreadsheet-btn" onClick={() => showToast('Insert in Spreadsheet coming soon')}>Insert in Spreadsheet</button>
+                    <button className="rpt-spreadsheet-btn" onClick={() => exportReportCsv(reportBuckets, 'Purchases report')}>Export CSV</button>
                     <div className="rpt-icon-group">
                       <button className={reportChartType === 'bar' ? 'active' : ''} title="Bar chart" onClick={() => setReportChartType('bar')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></button>
                       <button className={reportChartType === 'line' ? 'active' : ''} title="Line chart" onClick={() => setReportChartType('line')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 17 9 11 13 15 21 6"/></svg></button>
