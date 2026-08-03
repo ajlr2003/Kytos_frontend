@@ -193,7 +193,7 @@ export default function Sidebar({ activePage, goPage, extraNav, subNavGroups }) 
       .catch(() => {});
   }, []);
 
-  const navItems = isAdmin ? [...NAV_ITEMS, USERS_NAV_ITEM] : NAV_ITEMS;
+  const navItems = NAV_ITEMS;
 
   return (
     <div className="sb">
@@ -261,6 +261,19 @@ export default function Sidebar({ activePage, goPage, extraNav, subNavGroups }) 
         {extraNav}
       </nav>
 
+      {/* ── Admin-only account area ── */}
+      {isAdmin && (
+        <a
+          className={`ni${activePage === 'users' ? ' active' : ''}`}
+          href="#"
+          onClick={e => { e.preventDefault(); goPage('users'); }}
+          style={{ marginTop: 'auto' }}
+        >
+          {USERS_NAV_ITEM.icon}
+          {USERS_NAV_ITEM.label}
+        </a>
+      )}
+
       {/* ── Log out ── */}
       <a
         className="ni"
@@ -270,7 +283,7 @@ export default function Sidebar({ activePage, goPage, extraNav, subNavGroups }) 
           localStorage.removeItem('token');
           window.location.reload();
         }}
-        style={{ marginTop: 'auto', color: '#dc2626' }}
+        style={{ marginTop: isAdmin ? 0 : 'auto', color: '#dc2626' }}
       >
         <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         Log Out
