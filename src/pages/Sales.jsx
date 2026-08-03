@@ -24,7 +24,7 @@ import { API_BASE } from '../config.js';
  * Auth:     Bearer token stored in localStorage under key "token".
  */
 
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
@@ -1160,6 +1160,94 @@ function normalizeApiQuote(q) {
   };
 }
 
+/* ── Discount Rules management ── */
+function DiscountRulesModal({ rules, onClose, onChanged, showToast }) {
+  const EMPTY = { name: '', description: '', discount_label: '', min_order_value: '', is_active: true };
+  const [form, setForm]     = useState(EMPTY);
+  const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  function authHeaders() {
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` };
+  }
+
+  function startEdit(r) {
+    setEditingId(r.id);
+    setForm({ name: r.name, description: r.description || '', discount_label: r.discount_label, min_order_value: r.min_order_value ?? '', is_active: r.is_active });
+  }
+  function cancelEdit() { setEditingId(null); setForm(EMPTY); }
+
+  async function save() {
+    if (!form.name.trim() || !form.discount_label.trim()) { showToast('Name and discount are required.'); return; }
+    setSaving(true);
+    try {
+      const body = {
+        name: form.name.trim(),
+        description: form.description.trim() || undefined,
+        discount_label: form.discount_label.trim(),
+        min_order_value: form.min_order_value !== '' ? Number(form.min_order_value) : undefined,
+        is_active: form.is_active,
+      };
+      const url = editingId ? `${API_BASE}/api/v1/discount-rules/${editingId}` : `${API_BASE}/api/v1/discount-rules`;
+      const res = await fetch(url, { method: editingId ? 'PATCH' : 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+      if (res.ok) { cancelEdit(); onChanged(); showToast(editingId ? 'Rule updated' : 'Rule created'); }
+      else showToast((await res.json().catch(() => ({}))).detail || 'Failed to save rule');
+    } finally { setSaving(false); }
+  }
+
+  async function remove(id) {
+    if (!window.confirm('Delete this discount rule?')) return;
+    const res = await fetch(`${API_BASE}/api/v1/discount-rules/${id}`, { method: 'DELETE', headers: authHeaders() });
+    if (res.ok || res.status === 204) { onChanged(); showToast('Rule deleted'); }
+  }
+
+  const inp = { width: '100%', height: 34, border: '1px solid #d1d5db', borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' };
+  const lbl = { fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 };
+
+  return (
+    <Modal title="Discount Rules" onClose={onClose}>
+      <div style={{ display: 'grid', gap: '8px', marginBottom: '18px' }}>
+        {rules.length === 0 && <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>No discount rules yet.</div>}
+        {rules.map(r => (
+          <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 8, opacity: r.is_active ? 1 : 0.5 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{r.name} {!r.is_active && <span style={{ fontSize: 11, color: '#9ca3af' }}>(inactive)</span>}</div>
+              {r.description && <div style={{ fontSize: 12, color: '#9ca3af' }}>{r.description}</div>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#16a34a' }}>{r.discount_label}</span>
+              <button onClick={() => startEdit(r)} style={{ height: 26, width: 26, background: '#f3f4f6', border: 'none', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>✎</button>
+              <button onClick={() => remove(r.id)} style={{ height: 26, width: 26, background: '#fef2f2', color: '#dc2626', border: 'none', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>✕</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: '10px' }}>{editingId ? 'Edit Rule' : 'New Rule'}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+          <div><label style={lbl}>Name *</label><input style={inp} placeholder="e.g. Volume Discount" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+          <div><label style={lbl}>Discount *</label><input style={inp} placeholder="e.g. 10-25% or 15%" value={form.discount_label} onChange={e => setForm(f => ({ ...f, discount_label: e.target.value }))} /></div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+          <div><label style={lbl}>Description</label><input style={inp} placeholder="e.g. Orders above SAR 50,000" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} /></div>
+          <div><label style={lbl}>Min. Order Value (SAR)</label><input type="number" min="0" style={inp} placeholder="optional" value={form.min_order_value} onChange={e => setForm(f => ({ ...f, min_order_value: e.target.value }))} /></div>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 13, color: '#374151', marginBottom: '14px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} />
+          Active (shown to sales staff)
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+          {editingId && <button onClick={cancelEdit} style={{ height: 34, padding: '0 16px', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', fontSize: 13, cursor: 'pointer' }}>Cancel</button>}
+          <button onClick={save} disabled={saving} style={{ height: 34, padding: '0 18px', border: 'none', borderRadius: 8, background: '#7c3aed', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            {saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add Rule'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ════════════════════════════════════════
    SALES PAGE — ROOT COMPONENT
 ════════════════════════════════════════ */
@@ -1209,8 +1297,19 @@ export default function Sales({ goPage, onLogout }) {
   ]);
   const [newTask, setNewTask]               = useState('');
   const [showTaskInput, setShowTaskInput]   = useState(false);
+  const [discountRules, setDiscountRules]   = useState([]);
+  const [showDiscountModal, setShowDiscountModal] = useState(false);
 
   function getToken() { return localStorage.getItem('token'); }
+
+  const fetchDiscountRules = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch(`${API_BASE}/api/v1/discount-rules`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.items) setDiscountRules(d.items); })
+      .catch(() => {});
+  }, []);
 
   function handleAuthError() {
     showToast('Session expired — please log in again');
@@ -1219,6 +1318,10 @@ export default function Sales({ goPage, onLogout }) {
 
   function showToast(msg) { setToast(msg); }
   function toggleKpi(k)   { setOpenKpi(p => p === k ? null : k); }
+
+  useEffect(() => {
+    fetchDiscountRules();
+  }, [fetchDiscountRules]);
 
   useEffect(() => {
     const token = getToken();
@@ -2182,24 +2285,31 @@ export default function Sales({ goPage, onLogout }) {
               {/* Discount Rules */}
               <div className="pur-tab-card">
                 <div style={{fontSize:'14.5px',fontWeight:700,color:'#111827',marginBottom:'14px'}}>Discount Rules</div>
-                {[
-                  { label:'Volume Discount',  sub:'Orders above $50K',       val:'10-25%', color:'#16a34a' },
-                  { label:'Early Bird',       sub:'Payment within 7 days',   val:'15%',    color:'#16a34a' },
-                  { label:'Loyalty Program',  sub:'Based on customer tier',  val:'5-20%',  color:'#7c3aed' },
-                ].map(r => (
-                  <div key={r.label} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid #f3f4f6'}}>
+                {discountRules.filter(r => r.is_active).length === 0 && (
+                  <div style={{fontSize:'12.5px',color:'#9ca3af',padding:'8px 0'}}>No active discount rules.</div>
+                )}
+                {discountRules.filter(r => r.is_active).map(r => (
+                  <div key={r.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid #f3f4f6'}}>
                     <div>
-                      <div style={{fontSize:'13px',fontWeight:600,color:'#111827'}}>{r.label}</div>
-                      <div style={{fontSize:'12px',color:'#9ca3af',marginTop:'1px'}}>{r.sub}</div>
+                      <div style={{fontSize:'13px',fontWeight:600,color:'#111827'}}>{r.name}</div>
+                      {r.description && <div style={{fontSize:'12px',color:'#9ca3af',marginTop:'1px'}}>{r.description}</div>}
                     </div>
-                    <span style={{fontSize:'13px',fontWeight:700,color:r.color}}>{r.val}</span>
+                    <span style={{fontSize:'13px',fontWeight:700,color:'#16a34a'}}>{r.discount_label}</span>
                   </div>
                 ))}
                 <button style={{width:'100%',height:'34px',background:'#fff',color:'#374151',border:'1px solid #e5e7eb',borderRadius:'8px',fontSize:'13px',fontWeight:500,cursor:'pointer',marginTop:'12px'}}
-                  onClick={() => showToast('Discount Rules management — coming soon')}>
+                  onClick={() => setShowDiscountModal(true)}>
                   Manage Rules
                 </button>
               </div>
+              {showDiscountModal && (
+                <DiscountRulesModal
+                  rules={discountRules}
+                  onClose={() => setShowDiscountModal(false)}
+                  onChanged={fetchDiscountRules}
+                  showToast={showToast}
+                />
+              )}
 
               {/* Fulfillment Status */}
               <div className="pur-tab-card">
