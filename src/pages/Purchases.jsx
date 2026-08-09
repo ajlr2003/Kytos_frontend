@@ -685,6 +685,7 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
   const [sending,     setSending]     = useState(false);
   const [localStatus, setLocalStatus] = useState(null); // overrides detail.status after send
   const [sendSuccess, setSendSuccess] = useState(false);
+  const [emailWarning, setEmailWarning] = useState('');
   const [quotations,  setQuotations]  = useState([]);
   const [quotationsLoading, setQuotationsLoading] = useState(true);
   const [selectedSupplierId,   setSelectedSupplierId]   = useState(null);
@@ -784,8 +785,10 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`Failed to send RFQ (${res.status})`);
+      const data = await res.json().catch(() => ({}));
       setLocalStatus('SENT');
       setSendSuccess(true);
+      if (data.email_warning) setEmailWarning(data.email_warning);
       onSend();
     } catch (err) {
       setError(err.message);
@@ -998,9 +1001,14 @@ function RFQDetailModal({ rfq, onClose, onSend, purchaseOrders = [], onPOCreated
         </div>
       </>}
 
-      {sendSuccess && (
+      {sendSuccess && !emailWarning && (
         <div style={{ margin: '12px 0 0', padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', color: '#15803d', fontSize: '13px' }}>
           RFQ sent successfully! Suppliers will be notified.
+        </div>
+      )}
+      {sendSuccess && emailWarning && (
+        <div style={{ margin: '12px 0 0', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', color: '#92400e', fontSize: '13px' }}>
+          {emailWarning}
         </div>
       )}
 

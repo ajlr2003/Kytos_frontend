@@ -240,7 +240,7 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
         }
         const sentQuote = await sendRes.json();
         onCreate(normalizeApiQuote(sentQuote));
-        showToast('Quotation sent to client');
+        showToast(sentQuote.email_warning || 'Quotation sent to client');
       } else {
         onCreate(normalizeApiQuote(serverQuote));
         showToast('Quotation saved as draft');
