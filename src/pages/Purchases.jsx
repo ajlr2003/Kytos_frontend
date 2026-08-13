@@ -12,7 +12,7 @@ import { API_BASE } from '../config.js';
  * Auth:     Bearer token stored in localStorage under key "token".
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
@@ -23,6 +23,46 @@ import { VendorPricelistFormPage } from '../components/products/VendorPricelistP
 import { AnalysisBarLineChart, AnalysisPieChart } from '../components/reports/AnalysisCharts';
 import { ConfigListModal, GeneralSettingsModal } from '../components/config/ConfigModals';
 import '../styles/Purchases.css';
+
+/* ─── Supplier bulk import (CSV) ───────────────────────────────────────────── */
+
+const SUPPLIER_CSV_FIELDS = [
+  'company_name', 'contact_name', 'email', 'phone',
+  'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country',
+  'tax_id', 'payment_terms_days', 'currency', 'bank_details', 'rating', 'is_preferred', 'notes',
+];
+
+/* Minimal CSV parse/serialize — handles quoted fields with embedded commas. */
+function parseSupplierCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = ''; rows.push(row); row = [];
+    } else field += ch;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+function supplierCsvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadSupplierCsv(filename, rows) {
+  const csv = rows.map(r => r.map(supplierCsvCell).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 
 /* ─── API response → display shape ─── */
 const STATUS_BADGE = { DRAFT:'rb-pending', SENT:'rb-review', RECEIVED:'rb-review', EVALUATED:'rb-review', AWARDED:'rb-completed', CLOSED:'rb-completed', CANCELLED:'rb-cancelled' };
@@ -1990,6 +2030,8 @@ export default function Purchases({ goPage }) {
   const [showGRNModal, setShowGRNModal] = useState(false);
   const [suppliers, setSuppliers]           = useState([]);
   const [products, setProducts]             = useState([]);
+  const [importingSuppliers, setImportingSuppliers] = useState(false);
+  const supplierFileInputRef = useRef(null);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productSearch, setProductSearch]   = useState('');
   const [suppliersLoading, setSuppliersLoading] = useState(true);
@@ -2124,6 +2166,44 @@ export default function Purchases({ goPage }) {
       setSuppliersLoading(false);
     }
   }, []);
+
+  const downloadSupplierTemplate = () => downloadSupplierCsv('suppliers-template.csv', [SUPPLIER_CSV_FIELDS]);
+
+  const importSuppliersCsv = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const text = await file.text();
+    const rows = parseSupplierCsv(text);
+    if (rows.length < 2) { showToast('CSV has no data rows'); return; }
+    const header = rows[0].map(h => h.trim());
+    const dataRows = rows.slice(1);
+    const token = localStorage.getItem('token');
+    setImportingSuppliers(true);
+    let ok = 0, failed = 0;
+    for (const r of dataRows) {
+      const rec = {};
+      header.forEach((h, idx) => { if (SUPPLIER_CSV_FIELDS.includes(h)) rec[h] = r[idx]?.trim() ?? ''; });
+      if (!rec.company_name || !rec.email) { failed++; continue; }
+      const body = {
+        ...rec,
+        payment_terms_days: rec.payment_terms_days ? Number(rec.payment_terms_days) : undefined,
+        rating: rec.rating ? Number(rec.rating) : undefined,
+        is_preferred: rec.is_preferred ? /^(true|1|yes)$/i.test(rec.is_preferred) : undefined,
+      };
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/suppliers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(body),
+        });
+        if (res.ok) ok++; else failed++;
+      } catch { failed++; }
+    }
+    setImportingSuppliers(false);
+    showToast(`Imported ${ok} supplier(s)${failed ? `, ${failed} failed` : ''}`);
+    fetchSuppliers();
+  };
 
   const fetchProducts = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -2749,6 +2829,14 @@ export default function Purchases({ goPage }) {
                     <div className="rfq-toolbar-btns">
                       <button className="btn-action btn-purple" onClick={() => setShowNewVendor(true)}>
                         <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New
+                      </button>
+                      <button className="btn-action" onClick={downloadSupplierTemplate} title="Download a CSV template">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Template
+                      </button>
+                      <input ref={supplierFileInputRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={importSuppliersCsv} />
+                      <button className="btn-action" onClick={() => supplierFileInputRef.current?.click()} disabled={importingSuppliers}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        {importingSuppliers ? 'Importing…' : 'Import CSV'}
                       </button>
                     </div>
                     <div className="rfq-breadcrumb">
