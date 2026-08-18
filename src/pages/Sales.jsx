@@ -111,6 +111,18 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
   }, []);
 
   const selectedRfq = rfqs.find(r => r.id === rfqId);
+
+  // Linking an RFQ that carries the customer's own reference number fills
+  // "Your Ref." from it — avoids showing two separate fields for the same
+  // reference (one auto-filled, one manual). Without a linked RFQ, "Your
+  // Ref." stays a plain manual field.
+  useEffect(() => {
+    if (selectedRfq?.customer_reference) {
+      setCustomer(p => ({ ...p, yourRef: selectedRfq.customer_reference }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rfqId]);
+
   const [remarks, setRemarks] = useState(
     'Thank you for the opportunity to submit this quotation. We look forward to your favourable response and remain available for any clarifications or additional information required.'
   );
@@ -340,11 +352,6 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
               ))}
             </select>
           </SField>
-          {selectedRfq?.customer_reference && (
-            <SField label="Customer RFQ Ref.">
-              <input className="sqb-inp sqb-inp-mono" readOnly value={selectedRfq.customer_reference} />
-            </SField>
-          )}
         </div>
       </div>
 
