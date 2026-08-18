@@ -1368,7 +1368,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   const [crmLeadId,        setCrmLeadId]         = useState('');
   const [title,            setTitle]             = useState('');
   const [description,      setDescription]       = useState('');
-  const [vendorRef,        setVendorRef]        = useState('');
+  const [customerRef,      setCustomerRef]      = useState('');
   const [deadline,         setDeadline]         = useState(nowAsDatetimeLocal);
   const [expectedArrival,  setExpectedArrival]  = useState('');
   const [arrivalConfirmation, setArrivalConfirmation] = useState(false);
@@ -1401,7 +1401,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
   function onLeadChange(id) {
     setCrmLeadId(id);
     const lead = crmLeads.find(l => l.id === id);
-    if (lead?.customer_reference && !vendorRef.trim()) setVendorRef(lead.customer_reference);
+    if (lead?.customer_reference && !customerRef.trim()) setCustomerRef(lead.customer_reference);
   }
 
   function toggleSupplier(id) {
@@ -1474,7 +1474,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
       const payload = {
         title: title.trim(),
         ...(fullDescription && { description: fullDescription }),
-        ...(vendorRef.trim() && { customer_reference: vendorRef.trim() }),
+        ...(customerRef.trim() && { customer_reference: customerRef.trim() }),
         ...(crmLeadId && { crm_lead_id: crmLeadId }),
         ...(deadline && { deadline: deadline.split('T')[0] }),
         currency: 'SAR',
@@ -1568,8 +1568,8 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
               <div className="nrfq-field-grid">
                 <div className="nrfq-field-col">
                   <div className="nrfq-field">
-                    <label>Vendor Reference</label>
-                    <input type="text" placeholder="e.g. the number the vendor sent us" value={vendorRef} onChange={e => setVendorRef(e.target.value)} />
+                    <label>Customer Reference</label>
+                    <input type="text" placeholder="e.g. the customer's own reference for this request" value={customerRef} onChange={e => setCustomerRef(e.target.value)} />
                   </div>
                   <div className="nrfq-field">
                     <label>Payment Terms</label>
@@ -1584,7 +1584,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                       ))}
                     </select>
                     {selectedLead?.customer_reference && (
-                      <div className="nrfq-hint">Inherited into Vendor Reference — edit that field to override.</div>
+                      <div className="nrfq-hint">Inherited into Customer Reference — edit that field to override.</div>
                     )}
                   </div>
                 </div>
@@ -1696,7 +1696,7 @@ function NewRFQPage({ onCancel, onCreated, showToast }) {
                 <div><span>Title</span><strong>{title || '—'}</strong></div>
                 <div><span>Suppliers</span><strong>{selectedSuppliers.length}</strong></div>
                 <div><span>Order Deadline</span><strong>{deadline ? new Date(deadline).toLocaleString() : '—'}</strong></div>
-                <div><span>Vendor Reference</span><strong>{vendorRef || '—'}</strong></div>
+                <div><span>Customer Reference</span><strong>{customerRef || '—'}</strong></div>
                 <div><span>Items</span><strong>{items.length}</strong></div>
               </div>
               <div className="nrfq-field" style={{ marginTop: '16px' }}>
