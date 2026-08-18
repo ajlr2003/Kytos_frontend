@@ -96,6 +96,8 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
   const [crmLeads, setCrmLeads] = useState([]);
   const [rfqId, setRfqId] = useState('');
   const [rfqs, setRfqs] = useState([]);
+  const [customerRfqId, setCustomerRfqId] = useState('');
+  const [customerRfqs, setCustomerRfqs] = useState([]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -108,20 +110,29 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
       .then(r => r.ok ? r.json() : { items: [] })
       .then(d => setRfqs(Array.isArray(d) ? d : d.items ?? []))
       .catch(() => {});
+    fetch(`${API_BASE}/api/v1/customer-rfqs`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : { items: [] })
+      .then(d => setCustomerRfqs((Array.isArray(d) ? d : d.items ?? []).filter(r => r.status !== 'closed')))
+      .catch(() => {});
   }, []);
 
   const selectedRfq = rfqs.find(r => r.id === rfqId);
+  const selectedCustomerRfq = customerRfqs.find(r => r.id === customerRfqId);
 
-  // Linking an RFQ that carries the customer's own reference number fills
-  // "Your Ref." from it — avoids showing two separate fields for the same
-  // reference (one auto-filled, one manual). Without a linked RFQ, "Your
+  // Linking a Customer RFQ (the request the customer actually sent us) or a
+  // Purchase RFQ that carries the customer's own reference fills "Your Ref."
+  // from it — avoids showing two separate fields for the same reference
+  // (one auto-filled, one manual). Customer RFQ takes priority since it's
+  // literally what "Your Ref." represents; without either linked, "Your
   // Ref." stays a plain manual field.
   useEffect(() => {
-    if (selectedRfq?.customer_reference) {
+    if (selectedCustomerRfq?.customer_reference) {
+      setCustomer(p => ({ ...p, yourRef: selectedCustomerRfq.customer_reference }));
+    } else if (selectedRfq?.customer_reference) {
       setCustomer(p => ({ ...p, yourRef: selectedRfq.customer_reference }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rfqId]);
+  }, [rfqId, customerRfqId]);
 
   const [remarks, setRemarks] = useState(
     'Thank you for the opportunity to submit this quotation. We look forward to your favourable response and remain available for any clarifications or additional information required.'
@@ -209,6 +220,7 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
       deadline: header.deadline || null,
       crm_lead_id: crmLeadId || null,
       rfq_id: rfqId || null,
+      customer_rfq_id: customerRfqId || null,
       items: validRows.map((r, idx) => ({
         line_no: idx + 1,
         catalog_no: r.catalogNo?.trim() || null,
@@ -342,7 +354,17 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
               ))}
             </select>
           </SField>
-          <SField label="Link to RFQ">
+          <SField label="Link to Customer RFQ (request received from customer)">
+            <select className="sqb-inp sqb-sel" value={customerRfqId} onChange={e => setCustomerRfqId(e.target.value)}>
+              <option value="">— None —</option>
+              {customerRfqs.map(r => (
+                <option key={r.id} value={r.id}>
+                  {r.customer_reference} — {r.customer_name}{r.status === 'quoted' ? ' (already quoted)' : ''}
+                </option>
+              ))}
+            </select>
+          </SField>
+          <SField label="Link to Purchase RFQ (sent to a supplier)">
             <select className="sqb-inp sqb-sel" value={rfqId} onChange={e => setRfqId(e.target.value)}>
               <option value="">— None —</option>
               {rfqs.map(r => (
@@ -1256,6 +1278,130 @@ function DiscountRulesModal({ rules, onClose, onChanged, showToast }) {
   );
 }
 
+/* ── Customer RFQs — requests received FROM a customer (manually logged;
+   there is no email/portal ingestion). Distinct from Purchase RFQs, which
+   Kytos sends TO suppliers (managed in the Purchases module). ── */
+const CUSTOMER_RFQ_STATUS_META = {
+  open:   { label: 'Open',   bg: '#dbeafe', color: '#1d4ed8' },
+  quoted: { label: 'Quoted', bg: '#fef9c3', color: '#a16207' },
+  closed: { label: 'Closed', bg: '#f3f4f6', color: '#6b7280' },
+};
+
+function CustomerRfqsModal({ rfqs, onClose, onChanged, showToast }) {
+  const EMPTY = { customer_reference: '', customer_name: '', source: '', date_received: '', subject: '', notes: '' };
+  const [form, setForm]         = useState(EMPTY);
+  const [saving, setSaving]     = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [busyId, setBusyId]     = useState(null);
+
+  function authHeaders() {
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` };
+  }
+
+  async function save() {
+    if (!form.customer_reference.trim() || !form.customer_name.trim()) {
+      showToast('Customer reference and customer name are required.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        customer_reference: form.customer_reference.trim(),
+        customer_name: form.customer_name.trim(),
+        source: form.source.trim() || undefined,
+        date_received: form.date_received || undefined,
+        subject: form.subject.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+      };
+      const res = await fetch(`${API_BASE}/api/v1/customer-rfqs`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+      if (res.ok) { setForm(EMPTY); onChanged(); showToast('Customer RFQ logged'); }
+      else showToast((await res.json().catch(() => ({}))).detail || 'Failed to log customer RFQ');
+    } finally { setSaving(false); }
+  }
+
+  async function close(rfq) {
+    if (!window.confirm(`Mark ${rfq.customer_reference} as closed?`)) return;
+    setBusyId(rfq.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/customer-rfqs/${rfq.id}/status`, {
+        method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status: 'closed' }),
+      });
+      if (res.ok) { onChanged(); showToast('Customer RFQ closed'); }
+      else showToast((await res.json().catch(() => ({}))).detail || 'Failed to close');
+    } finally { setBusyId(null); }
+  }
+
+  const visible = statusFilter === 'all' ? rfqs : rfqs.filter(r => r.status === statusFilter);
+
+  const inp = { width: '100%', height: 34, border: '1px solid #d1d5db', borderRadius: 8, padding: '0 10px', fontSize: 13, boxSizing: 'border-box' };
+  const lbl = { fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 };
+
+  return (
+    <Modal title="Customer RFQs" onClose={onClose} width={640}>
+      <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 14 }}>
+        Requests received FROM a customer (by email, SAP Ariba, etc.) — logged manually here so a quotation can trace back to what the customer actually asked for.
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {['all', 'open', 'quoted', 'closed'].map(f => (
+          <button key={f} onClick={() => setStatusFilter(f)}
+            style={{ height: 26, padding: '0 10px', borderRadius: 20, border: 'none', fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
+              background: statusFilter === f ? '#111827' : '#f3f4f6', color: statusFilter === f ? '#fff' : '#374151' }}>
+            {f === 'all' ? 'All' : CUSTOMER_RFQ_STATUS_META[f].label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gap: '8px', marginBottom: '18px', maxHeight: 260, overflowY: 'auto' }}>
+        {visible.length === 0 && <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>No customer RFQs{statusFilter !== 'all' ? ` (${statusFilter})` : ''} yet.</div>}
+        {visible.map(r => {
+          const meta = CUSTOMER_RFQ_STATUS_META[r.status] ?? CUSTOMER_RFQ_STATUS_META.open;
+          return (
+            <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{r.customer_reference} — {r.customer_name}</div>
+                <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                  {r.source || 'Email'}{r.date_received ? ` · ${r.date_received}` : ''}{r.subject ? ` · ${r.subject}` : ''}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 12, background: meta.bg, color: meta.color }}>{meta.label}</span>
+                {r.status !== 'closed' && (
+                  <button onClick={() => close(r)} disabled={busyId === r.id}
+                    style={{ height: 26, padding: '0 10px', background: '#f3f4f6', border: 'none', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>
+                    {busyId === r.id ? '…' : 'Close'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: '10px' }}>Log New Customer RFQ</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+          <div><label style={lbl}>Customer Reference *</label><input style={inp} placeholder="e.g. their SAP Ariba number" value={form.customer_reference} onChange={e => setForm(f => ({ ...f, customer_reference: e.target.value }))} /></div>
+          <div><label style={lbl}>Customer Name *</label><input style={inp} placeholder="e.g. Saudi Aramco" value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} /></div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+          <div><label style={lbl}>Source</label><input style={inp} placeholder="e.g. SAP Ariba, Email" value={form.source} onChange={e => setForm(f => ({ ...f, source: e.target.value }))} /></div>
+          <div><label style={lbl}>Date Received</label><input type="date" style={inp} value={form.date_received} onChange={e => setForm(f => ({ ...f, date_received: e.target.value }))} /></div>
+        </div>
+        <div style={{ marginBottom: '14px' }}>
+          <label style={lbl}>Subject / What they're asking for</label>
+          <input style={inp} placeholder="e.g. Gas analyzer spares" value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button onClick={save} disabled={saving} style={{ height: 34, padding: '0 18px', border: 'none', borderRadius: 8, background: '#7c3aed', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            {saving ? 'Saving…' : 'Log Customer RFQ'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ════════════════════════════════════════
    SALES PAGE — ROOT COMPONENT
 ════════════════════════════════════════ */
@@ -1307,6 +1453,8 @@ export default function Sales({ goPage, onLogout }) {
   const [showTaskInput, setShowTaskInput]   = useState(false);
   const [discountRules, setDiscountRules]   = useState([]);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
+  const [customerRfqs, setCustomerRfqs]     = useState([]);
+  const [showCustomerRfqModal, setShowCustomerRfqModal] = useState(false);
   const [configModal, setConfigModal] = useState(null); // { listType, title } | 'settings' | null
 
   function getToken() { return localStorage.getItem('token'); }
@@ -1317,6 +1465,15 @@ export default function Sales({ goPage, onLogout }) {
     fetch(`${API_BASE}/api/v1/discount-rules`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.items) setDiscountRules(d.items); })
+      .catch(() => {});
+  }, []);
+
+  const fetchCustomerRfqs = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch(`${API_BASE}/api/v1/customer-rfqs`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.items) setCustomerRfqs(d.items); })
       .catch(() => {});
   }, []);
 
@@ -1344,7 +1501,8 @@ export default function Sales({ goPage, onLogout }) {
 
   useEffect(() => {
     fetchDiscountRules();
-  }, [fetchDiscountRules]);
+    fetchCustomerRfqs();
+  }, [fetchDiscountRules, fetchCustomerRfqs]);
 
   useEffect(() => {
     const token = getToken();
@@ -1736,9 +1894,10 @@ export default function Sales({ goPage, onLogout }) {
         subNavGroups={[
           {
             key: 'orders', label: 'Orders', children: [
-              { label: 'Quotations',  active: activeTab === 'quotations', onClick: () => { setShowNewQuote(false); setActiveTab('quotations'); } },
-              { label: 'Orders',      active: activeTab === 'orders',     onClick: () => { setShowNewQuote(false); setActiveTab('orders'); } },
-              { label: 'Customers',   active: activeTab === 'customers',  onClick: () => { setShowNewQuote(false); setActiveTab('customers'); } },
+              { label: 'Quotations',    active: activeTab === 'quotations', onClick: () => { setShowNewQuote(false); setActiveTab('quotations'); } },
+              { label: 'Orders',        active: activeTab === 'orders',     onClick: () => { setShowNewQuote(false); setActiveTab('orders'); } },
+              { label: 'Customers',     active: activeTab === 'customers',  onClick: () => { setShowNewQuote(false); setActiveTab('customers'); } },
+              { label: 'Customer RFQs', onClick: () => setShowCustomerRfqModal(true) },
             ],
           },
           {
@@ -2318,6 +2477,14 @@ export default function Sales({ goPage, onLogout }) {
                   rules={discountRules}
                   onClose={() => setShowDiscountModal(false)}
                   onChanged={fetchDiscountRules}
+                  showToast={showToast}
+                />
+              )}
+              {showCustomerRfqModal && (
+                <CustomerRfqsModal
+                  rfqs={customerRfqs}
+                  onClose={() => setShowCustomerRfqModal(false)}
+                  onChanged={fetchCustomerRfqs}
                   showToast={showToast}
                 />
               )}
