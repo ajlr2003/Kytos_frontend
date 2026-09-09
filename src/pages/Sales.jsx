@@ -46,10 +46,13 @@ function makeRow(seed = 0) {
     catalogNo:   '',
     name:        '',
     description: '',
-    qty:         1,
-    unit:        'EA',
-    unitPrice:   '',
-    discount:    '',
+    qty:          1,
+    unit:         'EA',
+    cost:         '',   // cost, always in SAR — mandatory for factor pricing
+    otherCost:    '',   // manual fallback for the quote-currency cost, only used if the live rate fetch fails
+    factor:       '',
+    unitPrice:    '',
+    discount:     '',
   };
 }
 
@@ -96,6 +99,28 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
   const [crmLeads, setCrmLeads] = useState([]);
   const [rfqId, setRfqId] = useState('');
   const [rfqs, setRfqs] = useState([]);
+  // Live SAR → currency rates, e.g. { USD: 0.2667 }. Fetched once per session
+  // (all currencies come back in one call) and cached — open.er-api.com is a
+  // free, no-key FX API. NB: frankfurter.app (ECB-based) doesn't carry a SAR
+  // rate at all, so it can't be used here.
+  //
+  // The quotation has exactly one currency (header.currency) — every line
+  // item is priced and totalled in it, so there's no per-row currency to
+  // drift out of sync.
+  const [fxRates, setFxRates] = useState({});
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxFetched, setFxFetched] = useState(false);
+
+  useEffect(() => {
+    if (header.currency === 'SAR' || fxFetched || fxLoading) return;
+    setFxLoading(true);
+    fetch('https://open.er-api.com/v6/latest/SAR')
+      .then(r => r.json())
+      .then(data => { if (data?.result === 'success') setFxRates(data.rates || {}); })
+      .catch(() => {})
+      .finally(() => { setFxLoading(false); setFxFetched(true); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [header.currency]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -111,6 +136,15 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
   }, []);
 
   const selectedRfq = rfqs.find(r => r.id === rfqId);
+
+  // An RFQ that's already linked to a CRM lead is the authoritative source
+  // of that link — auto-follow it here so a quotation can't end up tagged
+  // to an RFQ's reference numbers while pointing at an unrelated CRM lead
+  // (the two dropdowns used to be fully independent, which is what caused
+  // the mismatch the client ran into on the Aug 18 call).
+  useEffect(() => {
+    if (selectedRfq?.crm_lead_id) setCrmLeadId(selectedRfq.crm_lead_id);
+  }, [selectedRfq?.crm_lead_id]);
   const [remarks, setRemarks] = useState(
     'Thank you for the opportunity to submit this quotation. We look forward to your favourable response and remain available for any clarifications or additional information required.'
   );
@@ -122,13 +156,34 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
   const expirationDate = new Date(new Date(header.date).getTime() + Number(header.validity) * 86400000)
     .toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
+  // Live rate for converting a SAR amount (Cost, factor-computed price) into
+  // the quotation's chosen currency. 1 when the quote is in SAR itself.
+  const fxRate = header.currency === 'SAR' ? 1 : fxRates[header.currency];
+  const fxReady = typeof fxRate === 'number';
+  const fxFailed = header.currency !== 'SAR' && fxFetched && !fxLoading && !fxReady;
+
   const rows = items.map(item => {
     const qty      = parseFloat(item.qty) || 0;
-    const up       = parseFloat(item.unitPrice) || 0;
+    // Cost × Factor is an internal-only pricing aid, computed in SAR (Cost is
+    // always SAR) then converted to the quote currency at today's rate. It's
+    // never sent to the backend or shown to the customer — only the
+    // resulting, already-converted unit price is.
+    const costFactorSar = (item.cost !== '' && item.factor !== '')
+      ? (parseFloat(item.cost) || 0) * (parseFloat(item.factor) || 0)
+      : null;
+    const computedUp = costFactorSar !== null && fxReady ? costFactorSar * fxRate : costFactorSar;
+    const up       = computedUp !== null ? computedUp : (parseFloat(item.unitPrice) || 0);
     const disc     = Math.min(100, Math.max(0, parseFloat(item.discount) || 0));
     const netPrice = up * (1 - disc / 100);
     const total    = netPrice * qty;
-    return { ...item, _qty: qty, _up: up, _disc: disc, _netPrice: netPrice, _total: total };
+    // Cost, converted into the quote currency for reference alongside the SAR cost.
+    const otherCostComputed = (item.cost !== '' && header.currency !== 'SAR' && fxReady)
+      ? Number(item.cost) * fxRate
+      : null;
+    return {
+      ...item, _qty: qty, _up: up, _disc: disc, _netPrice: netPrice, _total: total, _computedUp: computedUp,
+      _otherCostComputed: otherCostComputed,
+    };
   });
 
   const subtotal   = rows.reduce((s, r) => s + r._total, 0);
@@ -284,6 +339,7 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
               <option value="GBP">GBP — British Pound</option>
               <option value="AED">AED — UAE Dirham</option>
             </select>
+            <div className="nrfq-hint">Applies to every line item — a quote can't mix currencies row to row.</div>
           </SField>
           <SField label="Quote Validity">
             <select className="sqb-inp sqb-sel" value={header.validity} onChange={e => setH('validity', e.target.value)}>
@@ -323,12 +379,20 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
             </select>
           </SField>
           <SField label="Link to CRM Lead">
-            <select className="sqb-inp sqb-sel" value={crmLeadId} onChange={e => setCrmLeadId(e.target.value)}>
+            <select
+              className="sqb-inp sqb-sel"
+              value={crmLeadId}
+              disabled={!!selectedRfq?.crm_lead_id}
+              onChange={e => setCrmLeadId(e.target.value)}
+            >
               <option value="">— None —</option>
               {crmLeads.map(l => (
                 <option key={l.id} value={l.id}>{l.company}{l.contact_person ? ` · ${l.contact_person}` : ''}</option>
               ))}
             </select>
+            {selectedRfq?.crm_lead_id && (
+              <div className="nrfq-hint">Set automatically from the linked RFQ — clear the RFQ above to pick a different lead.</div>
+            )}
           </SField>
           <SField label="Link to RFQ">
             <select className="sqb-inp sqb-sel" value={rfqId} onChange={e => setRfqId(e.target.value)}>
@@ -409,6 +473,11 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
                 <th className="sqb-th sqb-th-desc">Description</th>
                 <th className="sqb-th sqb-th-r">Qty</th>
                 <th className="sqb-th sqb-th-c">Unit</th>
+                <th className="sqb-th sqb-th-r" title="Internal only — never shown to the customer">Cost (SAR) *</th>
+                {header.currency !== 'SAR' && (
+                  <th className="sqb-th sqb-th-r" title="Internal only — never shown to the customer">Cost ({header.currency})</th>
+                )}
+                <th className="sqb-th sqb-th-r" title="Internal only — never shown to the customer">Factor</th>
                 <th className="sqb-th sqb-th-r">Unit Price</th>
                 <th className="sqb-th sqb-th-r">Disc %</th>
                 <th className="sqb-th sqb-th-r">Net Price</th>
@@ -464,12 +533,58 @@ const QuotationBuilder = forwardRef(function QuotationBuilder({ onClose, onCreat
                     </select>
                   </td>
 
-                  {/* Unit Price */}
+                  {/* Cost (SAR) — mandatory for factor pricing, internal only */}
                   <td className="sqb-td sqb-td-r">
                     <input className="sqb-ci sqb-ci-r" type="number" min="0" step="0.01" placeholder="0.00"
-                      value={row.unitPrice}
-                      onChange={e => setItem(row.id, 'unitPrice', e.target.value)}
+                      value={row.cost}
+                      onChange={e => setItem(row.id, 'cost', e.target.value)}
                       onKeyDown={handleEnterKey} />
+                  </td>
+
+                  {/* Cost converted into the quote currency — auto-computed from Cost (SAR) at today's rate.
+                      Follows header.currency, so every row is always in the same currency. */}
+                  {header.currency !== 'SAR' && (
+                    <td className="sqb-td sqb-td-r">
+                      <input className="sqb-ci sqb-ci-r" type="number" min="0" step="0.01"
+                        placeholder={fxLoading ? 'Loading rate…' : '0.00'}
+                        value={row._otherCostComputed !== null ? row._otherCostComputed.toFixed(2) : row.otherCost}
+                        onChange={e => setItem(row.id, 'otherCost', e.target.value)}
+                        disabled={row._otherCostComputed !== null || fxLoading}
+                        title={row._otherCostComputed !== null
+                          ? `Live rate: 1 SAR = ${fxRate} ${header.currency}`
+                          : fxFailed ? 'Live rate unavailable — enter manually' : undefined}
+                        onKeyDown={handleEnterKey} />
+                      {fxFailed && <div className="nrfq-hint" style={{ margin: '2px 0 0' }}>Rate unavailable — manual entry</div>}
+                    </td>
+                  )}
+
+                  {/* Factor — internal only, never sent/shown to the customer */}
+                  <td className="sqb-td sqb-td-r">
+                    <input className="sqb-ci sqb-ci-r" type="number" min="0" step="0.01" placeholder="e.g. 2"
+                      value={row.factor}
+                      onChange={e => setItem(row.id, 'factor', e.target.value)}
+                      onKeyDown={handleEnterKey} />
+                  </td>
+
+                  {/* Unit Price — auto-computed from Cost × Factor when both are set.
+                      Background tint + badge make the auto vs manual distinction visible
+                      without needing to hover for the tooltip. */}
+                  <td className="sqb-td sqb-td-r">
+                    <div style={{ position: 'relative' }}>
+                      <input className="sqb-ci sqb-ci-r" type="number" min="0" step="0.01" placeholder="0.00"
+                        style={row._computedUp !== null ? { background: '#eff6ff', borderColor: '#bfdbfe', paddingRight: '38px' } : undefined}
+                        value={row._computedUp !== null ? row._computedUp.toFixed(2) : row.unitPrice}
+                        onChange={e => setItem(row.id, 'unitPrice', e.target.value)}
+                        disabled={row._computedUp !== null}
+                        title={row._computedUp !== null ? `Auto-computed: Cost × Factor${header.currency !== 'SAR' ? `, converted to ${header.currency}` : ''}` : undefined}
+                        onKeyDown={handleEnterKey} />
+                      {row._computedUp !== null && (
+                        <span
+                          style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', fontSize: '9px', fontWeight: 700, color: '#2563eb', background: '#dbeafe', borderRadius: '4px', padding: '1px 4px', pointerEvents: 'none' }}
+                          title="Auto-computed from Cost × Factor"
+                        >AUTO</span>
+                      )}
+                    </div>
                   </td>
 
                   {/* Discount % */}
@@ -766,13 +881,28 @@ function QuoteDetailModal({ quote, onClose, onSend, onConvert, onDiscount, onAcc
         <div className="pur-detail-row"><span>RFQ</span><strong style={{color:'#2563eb'}}>{quote.rfqNumber}{quote.customerReference ? ` (Cust. Ref: ${quote.customerReference})` : ''}</strong></div>
       )}
       <div className="pur-detail-row"><span>Dates</span><strong style={{color:'#6b7280',fontSize:'12.5px'}}>{quote.dates}</strong></div>
-      <div className="pur-detail-row"><span>Created By</span><strong style={{color:'#6b7280',fontSize:'12.5px'}}>{quote.createdByName || '—'}</strong></div>
+      <div className="pur-detail-row"><span>Created On</span><strong style={{color:'#6b7280',fontSize:'12.5px'}}>{quote.createdDateTime || '—'}</strong></div>
+      <div className="pur-detail-row">
+        <span>Created By</span>
+        <strong style={{color:'#6b7280',fontSize:'12.5px'}}>
+          {quote.createdByName || '—'}{quote.createdByEmail ? ` (${quote.createdByEmail})` : ''}
+        </strong>
+      </div>
       <div className="pur-detail-row">
         <span>Approved By</span>
         <strong style={{color:quote.approvedByName ? '#16a34a' : '#6b7280',fontSize:'12.5px'}}>
           {quote.approvedByName || 'Not yet approved'}
         </strong>
       </div>
+      {quote.updatedByName && (
+        <div className="pur-detail-row">
+          <span>Last Edited By</span>
+          <strong style={{color:'#6b7280',fontSize:'12.5px'}}>
+            {quote.updatedByName}{quote.updatedByEmail ? ` (${quote.updatedByEmail})` : ''}
+            {quote.updatedAt ? ` · ${new Date(quote.updatedAt).toLocaleString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}` : ''}
+          </strong>
+        </div>
+      )}
       <div className="pur-detail-row"><span>Notes</span><strong style={{color:'#6b7280',fontSize:'12.5px'}}>{quote.notes}</strong></div>
 
       {/* ── Tracker fields (OEM, Deadline, Follow-up, Outcome) ── */}
@@ -1124,6 +1254,7 @@ function normalizeApiQuote(q) {
   const sym = CURRENCY_SYMBOLS[q.currency] ?? '';
   const meta = STATUS_META[q.status] ?? STATUS_META.draft;
   const created = new Date(q.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+  const createdDateTime = new Date(q.created_at).toLocaleString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
   return {
     id: q.id,
     num: q.quote_number,
@@ -1137,10 +1268,15 @@ function normalizeApiQuote(q) {
     statusBg: meta.bg,
     statusColor: meta.color,
     dates: `Created: ${created}${q.validity ? ` · Valid ${q.validity} days` : ''}`,
+    createdDateTime,
     notes: [q.payment_terms, q.delivery_location].filter(Boolean).join(' · '),
     rfqNumber: q.rfq_number || null,
     customerReference: q.customer_reference || null,
     createdByName: q.created_by_name || null,
+    createdByEmail: q.created_by_email || null,
+    updatedByName: q.updated_by_name || null,
+    updatedByEmail: q.updated_by_email || null,
+    updatedAt: q.updated_at || null,
     approvedByName: q.approved_by_name || null,
     approvedAt: q.approved_at || null,
     createdAt: q.created_at || null,

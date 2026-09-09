@@ -13,6 +13,7 @@ import ActivityTimeline from '../ui/ActivityTimeline';
 import AuthedImage from '../ui/AuthedImage';
 
 export const PRODUCT_CATEGORY_OPTIONS = ['Goods', 'Services', 'Deliveries', 'Consumables', 'Equipment', 'Miscellaneous'];
+export const CURRENCY_OPTIONS = ['SAR', 'USD', 'EUR', 'GBP', 'AED'];
 
 /* ─── Product photo box — click to pick a file, uploads via /api/v1/documents/upload ─── */
 export function ProductPhotoBox({ imageUrl, onUploaded, showToast }) {
@@ -67,14 +68,14 @@ export function ProductPhotoBox({ imageUrl, onUploaded, showToast }) {
 export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast }) {
   const [form, setForm] = useState({
     description: '', part_number: '', serial_number: '', supplier_manufacturer: '',
-    unit_price: '', po_number: '', received_file_no: '', receiving_delivery_status: '',
+    unit_price: '', cost: '', price_factor: '', currency: 'SAR', po_number: '', received_file_no: '', receiving_delivery_status: '',
     stock_qty: 0, warehouse_location: '', box_number: '', expiry_date: '', customer_name: '',
     image_url: '',
   });
   // UI-only fields — not sent to the backend yet, wired up once the product
   // endpoint supports sales/tax data.
   const [uiFields, setUiFields] = useState({
-    category: 'Goods', barcode: '', salesPrice: '1.00', internalNotes: '',
+    category: 'Goods', barcode: '', internalNotes: '',
   });
   const [salesEnabled, setSalesEnabled] = useState(true);
   const [purchaseEnabled, setPurchaseEnabled] = useState(true);
@@ -84,6 +85,14 @@ export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast 
 
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
   function setUi(field, value) { setUiFields(f => ({ ...f, [field]: value })); }
+
+  // Sales price = cost × factor, computed live for preview. This mirrors the
+  // server-side calc (see inventory_service._apply_factor_pricing) — the
+  // server is the source of truth once saved, this is just so the wizard
+  // shows the right number before hitting Save.
+  const computedSalesPrice = (form.cost !== '' && form.price_factor !== '')
+    ? Number(form.cost) * Number(form.price_factor)
+    : null;
 
   const STEPS = ['Basics', 'Pricing', 'Inventory', 'Review'];
 
@@ -112,7 +121,9 @@ export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast 
 
       const payload = {
         ...form,
-        unit_price: form.unit_price === '' ? null : Number(form.unit_price),
+        unit_price: computedSalesPrice !== null ? computedSalesPrice : (form.unit_price === '' ? null : Number(form.unit_price)),
+        cost: form.cost === '' ? null : Number(form.cost),
+        price_factor: form.price_factor === '' ? null : Number(form.price_factor),
         stock_qty: Number(form.stock_qty) || 0,
       };
 
@@ -208,25 +219,42 @@ export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast 
 
           {step === 1 && (
             <div className="nrfq-field-grid">
-              {salesEnabled && (
-                <div className="nrfq-field-col">
-                  <div className="nrfq-field">
-                    <label>Sales Price</label>
-                    <div className="prd-inline-input">
-                      <input type="number" min="0" step="0.01" value={uiFields.salesPrice} onChange={e => setUi('salesPrice', e.target.value)} />
-                      <span>per Units</span>
-                    </div>
-                  </div>
+              <div className="nrfq-field-col">
+                <div className="nrfq-field">
+                  <label>Currency</label>
+                  <select value={form.currency} onChange={e => set('currency', e.target.value)}>
+                    {CURRENCY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
-              )}
-              {purchaseEnabled && (
-                <div className="nrfq-field-col">
+                {purchaseEnabled && (
                   <div className="nrfq-field">
                     <label>Cost</label>
                     <div className="prd-inline-input">
-                      <input type="number" min="0" step="0.01" placeholder="0.00" value={form.unit_price} onChange={e => set('unit_price', e.target.value)} />
-                      <span>per Units</span>
+                      <input type="number" min="0" step="0.01" placeholder="0.00" value={form.cost} onChange={e => set('cost', e.target.value)} />
+                      <span>per Unit</span>
                     </div>
+                  </div>
+                )}
+              </div>
+              {salesEnabled && (
+                <div className="nrfq-field-col">
+                  <div className="nrfq-field">
+                    <label>Multiplying Factor</label>
+                    <input type="number" min="0" step="0.01" placeholder="e.g. 2" value={form.price_factor} onChange={e => set('price_factor', e.target.value)} />
+                    <div className="nrfq-hint">Internal only — never shown to the customer. Sales price = Cost × Factor.</div>
+                  </div>
+                  <div className="nrfq-field">
+                    <label>Sales Price {computedSalesPrice !== null && <span style={{ fontWeight: 400, color: '#6b7280' }}>(auto: Cost × Factor)</span>}</label>
+                    <div className="prd-inline-input">
+                      <input
+                        type="number" min="0" step="0.01"
+                        value={computedSalesPrice !== null ? computedSalesPrice.toFixed(2) : form.unit_price}
+                        onChange={e => set('unit_price', e.target.value)}
+                        disabled={computedSalesPrice !== null}
+                      />
+                      <span>{form.currency}</span>
+                    </div>
+                    {computedSalesPrice === null && <div className="nrfq-hint">Set a Factor above to auto-compute, or enter a price manually.</div>}
                   </div>
                 </div>
               )}
@@ -274,8 +302,9 @@ export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast 
                 <div><span>Reference</span><strong>{form.part_number || '—'}</strong></div>
                 <div><span>Type</span><strong>{salesEnabled && purchaseEnabled ? 'Sales & Purchase' : salesEnabled ? 'Sales Only' : purchaseEnabled ? 'Purchase Only' : '—'}</strong></div>
                 <div><span>Category</span><strong>{uiFields.category || '—'}</strong></div>
-                {salesEnabled && <div><span>Sales Price</span><strong>{uiFields.salesPrice || '0.00'} SAR</strong></div>}
-                {purchaseEnabled && <div><span>Cost</span><strong>{form.unit_price || '0.00'} SAR</strong></div>}
+                {salesEnabled && <div><span>Sales Price</span><strong>{(computedSalesPrice !== null ? computedSalesPrice.toFixed(2) : form.unit_price) || '0.00'} {form.currency}</strong></div>}
+                {purchaseEnabled && <div><span>Cost</span><strong>{form.cost || '0.00'} {form.currency}</strong></div>}
+                {form.price_factor !== '' && <div><span>Factor (internal)</span><strong>×{form.price_factor}</strong></div>}
                 <div><span>Stock Qty</span><strong>{form.stock_qty || 0}</strong></div>
                 <div><span>Warehouse</span><strong>{form.warehouse_location || '—'}</strong></div>
                 <div><span>Supplier</span><strong>{form.supplier_manufacturer || '—'}</strong></div>
@@ -303,9 +332,10 @@ export function NewProductPage({ suppliers = [], onCancel, onCreated, showToast 
             <div className="prd-section-title">Live Summary</div>
             <div className="wiz-summary-name">{form.description || 'Untitled product'}</div>
             <div className="wiz-summary-ref">{form.part_number || 'No reference yet'}</div>
-            {salesEnabled && <div className="wiz-summary-price">{uiFields.salesPrice || '0.00'} <span>SAR</span></div>}
+            {salesEnabled && <div className="wiz-summary-price">{(computedSalesPrice !== null ? computedSalesPrice.toFixed(2) : form.unit_price) || '0.00'} <span>{form.currency}</span></div>}
             <div className="wiz-summary-row"><span>Type</span><strong>{salesEnabled && purchaseEnabled ? 'Sales & Purchase' : salesEnabled ? 'Sales Only' : purchaseEnabled ? 'Purchase Only' : '—'}</strong></div>
-            {purchaseEnabled && <div className="wiz-summary-row"><span>Cost</span><strong>{form.unit_price || '0.00'} SAR</strong></div>}
+            {purchaseEnabled && <div className="wiz-summary-row"><span>Cost</span><strong>{form.cost || '0.00'} {form.currency}</strong></div>}
+            {form.price_factor !== '' && <div className="wiz-summary-row"><span>Factor</span><strong>×{form.price_factor}</strong></div>}
             <div className="wiz-summary-row"><span>Stock</span><strong>{form.stock_qty || 0} units</strong></div>
             <div className="wiz-summary-row"><span>Category</span><strong>{uiFields.category || '—'}</strong></div>
             <div className="wiz-summary-row"><span>Vendor</span><strong>{form.supplier_manufacturer || '—'}</strong></div>
@@ -337,7 +367,8 @@ export function ProductDetailPage({ product, suppliers = [], onCancel, onUpdated
   const [form, setForm] = useState({
     description: product.description ?? '', part_number: product.part_number ?? '',
     serial_number: product.serial_number ?? '', supplier_manufacturer: product.supplier_manufacturer ?? '',
-    unit_price: product.unit_price ?? '', po_number: product.po_number ?? '',
+    unit_price: product.unit_price ?? '', cost: product.cost ?? '', price_factor: product.price_factor ?? '',
+    currency: product.currency ?? 'SAR', po_number: product.po_number ?? '',
     received_file_no: product.received_file_no ?? '', receiving_delivery_status: product.receiving_delivery_status ?? '',
     stock_qty: product.stock_qty ?? 0, warehouse_location: product.warehouse_location ?? '',
     box_number: product.box_number ?? '', expiry_date: product.expiry_date ?? '', customer_name: product.customer_name ?? '',
@@ -348,6 +379,12 @@ export function ProductDetailPage({ product, suppliers = [], onCancel, onUpdated
   const [error, setError]   = useState('');
 
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+
+  // Sales price = cost × factor, computed live for preview (server recomputes
+  // and is the source of truth once saved — see inventory_service).
+  const computedSalesPrice = (form.cost !== '' && form.price_factor !== '')
+    ? Number(form.cost) * Number(form.price_factor)
+    : null;
 
   async function submit() {
     if (!form.part_number.trim()) { setError('Reference is required.'); return; }
@@ -360,7 +397,9 @@ export function ProductDetailPage({ product, suppliers = [], onCancel, onUpdated
 
       const payload = {
         ...form,
-        unit_price: form.unit_price === '' ? null : Number(form.unit_price),
+        cost: form.cost === '' ? null : Number(form.cost),
+        price_factor: form.price_factor === '' ? null : Number(form.price_factor),
+        unit_price: computedSalesPrice !== null ? computedSalesPrice : (form.unit_price === '' ? null : Number(form.unit_price)),
         stock_qty: Number(form.stock_qty) || 0,
       };
 
@@ -447,8 +486,28 @@ export function ProductDetailPage({ product, suppliers = [], onCancel, onUpdated
             </div>
             <div className="nrfq-field-col">
               <div className="nrfq-field">
-                <label>Cost (SAR)</label>
-                <input type="number" min="0" step="0.01" placeholder="0.00" value={form.unit_price} onChange={e => set('unit_price', e.target.value)} />
+                <label>Currency</label>
+                <select value={form.currency} onChange={e => set('currency', e.target.value)}>
+                  {CURRENCY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="nrfq-field">
+                <label>Cost</label>
+                <input type="number" min="0" step="0.01" placeholder="0.00" value={form.cost} onChange={e => set('cost', e.target.value)} />
+              </div>
+              <div className="nrfq-field">
+                <label>Multiplying Factor</label>
+                <input type="number" min="0" step="0.01" placeholder="e.g. 2" value={form.price_factor} onChange={e => set('price_factor', e.target.value)} />
+                <div className="nrfq-hint">Internal only — never shown to the customer.</div>
+              </div>
+              <div className="nrfq-field">
+                <label>Sales Price {computedSalesPrice !== null && <span style={{ fontWeight: 400, color: '#6b7280' }}>(auto: Cost × Factor)</span>}</label>
+                <input
+                  type="number" min="0" step="0.01"
+                  value={computedSalesPrice !== null ? computedSalesPrice.toFixed(2) : form.unit_price}
+                  onChange={e => set('unit_price', e.target.value)}
+                  disabled={computedSalesPrice !== null}
+                />
               </div>
               <div className="nrfq-field">
                 <label>PO No.</label>
@@ -499,7 +558,8 @@ export function ProductDetailPage({ product, suppliers = [], onCancel, onUpdated
             <div className="prd-section-title">Overview</div>
             <div className="wiz-summary-name">{form.description || form.part_number || 'Untitled product'}</div>
             <div className="wiz-summary-ref">{form.part_number || 'No reference'}</div>
-            <div className="wiz-summary-price">{form.unit_price ? Number(form.unit_price).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : '0.00'} <span>SAR</span></div>
+            <div className="wiz-summary-price">{(computedSalesPrice !== null ? computedSalesPrice : Number(form.unit_price || 0)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} <span>{form.currency}</span></div>
+            {form.price_factor !== '' && <div className="wiz-summary-row"><span>Factor</span><strong>×{form.price_factor}</strong></div>}
             <div className="wiz-summary-row"><span>Stock</span><strong style={{ color: stockQty > 0 ? '#15803d' : '#b91c1c' }}>{stockQty > 0 ? `${stockQty} units` : 'Out of stock'}</strong></div>
             <div className="wiz-summary-row"><span>Vendor</span><strong>{form.supplier_manufacturer || '—'}</strong></div>
             <div className="wiz-summary-row"><span>Warehouse</span><strong>{form.warehouse_location || '—'}</strong></div>
