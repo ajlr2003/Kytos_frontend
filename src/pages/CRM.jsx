@@ -223,41 +223,56 @@ function AddLeadModal({ onClose, onSave }) {
 }
 
 
-/* === Log Call modal (UI-only, activity logging) === */
+/* === Log Call modal (persists to the lead's activity timeline) === */
 
 /**
  * @param {object}   props
- * @param {object[]} props.leads   - Lead list for company dropdown.
- * @param {Function} props.onClose - Close the modal.
- * @param {Function} props.onSave  - Called with a status message string.
+ * @param {object[]} props.leads      - Lead list for company dropdown.
+ * @param {string}   [props.leadId]   - Pre-selected lead id, if opened from a lead's detail view.
+ * @param {Function} props.onClose    - Close the modal.
+ * @param {Function} props.onSave     - Called with a status message string.
  */
-function LogCallModal({ leads, onClose, onSave }) {
-  const [form, setForm] = useState({ company: '', contact: '', duration: '', outcome: '', notes: '', followUp: '' });
-  const [saved, setSaved] = useState(false);
+function LogCallModal({ leads, leadId, onClose, onSave }) {
+  const [form, setForm] = useState({ leadId: leadId || '', contact: '', duration: '', outcome: '', notes: '', followUp: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  function save() {
-    if (!form.company) return;
-    setSaved(true);
-    setTimeout(() => { onSave(`Call logged with ${form.company}`); onClose(); }, 900);
+  async function save() {
+    if (!form.leadId) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/crm/leads/${form.leadId}/calls`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          contact_person: form.contact.trim() || null,
+          duration_minutes: form.duration ? parseInt(form.duration, 10) : null,
+          outcome: form.outcome || null,
+          notes: form.notes.trim() || null,
+          follow_up_date: form.followUp || null,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to log call');
+      setSaving(false);
+      const company = leads.find(l => l.id === form.leadId)?.company || 'lead';
+      onSave(`Call logged with ${company}`);
+      onClose();
+    } catch (e) {
+      setSaving(false);
+      setError(e.message);
+    }
   }
 
   return (
     <Modal title="Log Call Activity" onClose={onClose}>
-      {saved ? (
-        <div className="pur-success">
-          <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
-          </svg>
-          <div>Call activity logged!</div>
-        </div>
-      ) : (
-        <>
+          {error && <div style={{color:'#dc2626',fontSize:'12.5px',marginBottom:'10px'}}>{error}</div>}
           <div className="pur-form-grid">
             <div className="pur-form-group">
               <label>Company *</label>
-              <select value={form.company} onChange={e => setForm({...form, company: e.target.value})}>
+              <select value={form.leadId} onChange={e => setForm({...form, leadId: e.target.value})}>
                 <option value="">Select company…</option>
-                {leads.map(l => <option key={l.id} value={l.company}>{l.company}</option>)}
+                {leads.map(l => <option key={l.id} value={l.id}>{l.company}</option>)}
               </select>
             </div>
             <div className="pur-form-group">
@@ -291,11 +306,9 @@ function LogCallModal({ leads, onClose, onSave }) {
             <input type="date" value={form.followUp} onChange={e => setForm({...form, followUp: e.target.value})} />
           </div>
           <div className="pur-modal-actions">
-            <button className="pur-btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="pur-btn-primary" onClick={save}>Log Call</button>
+            <button className="pur-btn-cancel" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="pur-btn-primary" onClick={save} disabled={saving}>{saving ? 'Logging…' : 'Log Call'}</button>
           </div>
-        </>
-      )}
     </Modal>
   );
 }
@@ -444,6 +457,7 @@ const STAGES = [
  */
 export default function CRM({ goPage }) {
   const [modal,        setModal]        = useState(null);   // 'addlead' | 'logcall'
+  const [logCallLeadId, setLogCallLeadId] = useState('');
   const [leads,        setLeads]        = useState([]);
   const [kpis,         setKpis]         = useState(null);
   const [currentUser,  setCurrentUser]  = useState(null);
@@ -581,13 +595,13 @@ export default function CRM({ goPage }) {
     <div id="crm-page">
       {toast     && <Toast msg={toast} onClose={() => setToast(null)} />}
       {modal === 'addlead' && <AddLeadModal onClose={() => setModal(null)} onSave={onLeadCreated} />}
-      {modal === 'logcall' && <LogCallModal leads={leads} onClose={() => setModal(null)} onSave={showToast} />}
+      {modal === 'logcall' && <LogCallModal leads={leads} leadId={logCallLeadId} onClose={() => { setModal(null); setLogCallLeadId(''); }} onSave={showToast} />}
       {leadDetail && (
         <LeadDetailModal
           lead={leadDetail}
           onClose={() => setLeadDetail(null)}
           onMove={moveLead}
-          onLog={() => setModal('logcall')}
+          onLog={() => { setLogCallLeadId(leadDetail.id); setModal('logcall'); }}
         />
       )}
 
@@ -795,7 +809,7 @@ export default function CRM({ goPage }) {
                         </div>
                       )}
                       <div style={{display:'flex',gap:'8px'}}>
-                        <button className="pur-btn-primary"    style={{flex:1,height:'32px',fontSize:'12.5px'}} onClick={() => setModal('logcall')}>Log Call</button>
+                        <button className="pur-btn-primary"    style={{flex:1,height:'32px',fontSize:'12.5px'}} onClick={() => { setLogCallLeadId(selectedLead.id); setModal('logcall'); }}>Log Call</button>
                         <button className="pur-btn-secondary"  style={{flex:1,height:'32px',fontSize:'12.5px'}} onClick={() => showToast('Email composer coming soon')}>Send Email</button>
                       </div>
                     </div>

@@ -65,16 +65,19 @@ const PALETTE = ['#074E3B', '#1d4ed8', '#a16207', '#7c3aed'];
 
 const EMPTY_ITEM = {
   warehouse_location: '', box_number: '', supplier_manufacturer: '',
-  part_number: '', serial_number: '', description: '',
+  part_number: '', cat_number: '', serial_number: '', description: '',
   expiry_date: '', stock_qty: 0, received_file_no: '', po_number: '',
-  unit_price: '', receiving_delivery_status: '', customer_name: '', image_url: '',
+  cost: '', price_factor: '', unit_price: '', currency: '',
+  receiving_delivery_status: '', customer_name: '', image_url: '',
 };
+
+const CURRENCY_OPTIONS = ['SAR', 'USD', 'AED', 'EUR', 'GBP'];
 const EMPTY_MOV = { item_id: '', movement_type: 'IN', quantity: 1, reference_no: '', delivery_note_no: '', notes: '' };
 
 const CSV_FIELDS = [
-  'warehouse_location', 'box_number', 'supplier_manufacturer', 'part_number', 'serial_number',
-  'description', 'expiry_date', 'stock_qty', 'received_file_no', 'po_number', 'unit_price',
-  'receiving_delivery_status', 'customer_name',
+  'warehouse_location', 'box_number', 'supplier_manufacturer', 'part_number', 'cat_number', 'serial_number',
+  'description', 'expiry_date', 'stock_qty', 'received_file_no', 'po_number', 'cost', 'price_factor',
+  'unit_price', 'currency', 'receiving_delivery_status', 'customer_name',
 ];
 
 /* Minimal CSV parse/serialize — handles quoted fields with embedded commas. */
@@ -169,10 +172,12 @@ function Inventory({ goPage }) {
     setItemForm({
       warehouse_location: item.warehouse_location ?? '', box_number: item.box_number ?? '',
       supplier_manufacturer: item.supplier_manufacturer ?? '', part_number: item.part_number ?? '',
-      serial_number: item.serial_number ?? '', description: item.description ?? '',
+      cat_number: item.cat_number ?? '', serial_number: item.serial_number ?? '', description: item.description ?? '',
       expiry_date: item.expiry_date ?? '', stock_qty: item.stock_qty ?? 0,
       received_file_no: item.received_file_no ?? '', po_number: item.po_number ?? '',
-      unit_price: item.unit_price ?? '', receiving_delivery_status: item.receiving_delivery_status ?? '',
+      cost: item.cost ?? '', price_factor: item.price_factor ?? '',
+      unit_price: item.unit_price ?? '', currency: item.currency ?? '',
+      receiving_delivery_status: item.receiving_delivery_status ?? '',
       customer_name: item.customer_name ?? '', image_url: item.image_url ?? '',
     });
     setEditItem(item);
@@ -201,7 +206,13 @@ function Inventory({ goPage }) {
     if (!itemForm.part_number.trim()) { showToast('Part number is required'); return; }
     setSaving(true);
     try {
-      const body = { ...itemForm, unit_price: itemForm.unit_price === '' ? null : Number(itemForm.unit_price), stock_qty: Number(itemForm.stock_qty) };
+      const body = {
+        ...itemForm,
+        unit_price: itemForm.unit_price === '' ? null : Number(itemForm.unit_price),
+        cost: itemForm.cost === '' ? null : Number(itemForm.cost),
+        price_factor: itemForm.price_factor === '' ? null : Number(itemForm.price_factor),
+        stock_qty: Number(itemForm.stock_qty),
+      };
       const url = editItem ? `${API_BASE}/api/v1/inventory/items/${editItem.id}` : `${API_BASE}/api/v1/inventory/items`;
       const r = await fetch(url, { method: editItem ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
       if (r.ok) { showToast(editItem ? 'Item updated' : 'Item added'); setShowAddItem(false); fetchItems(); fetchKpis(); }
@@ -262,6 +273,8 @@ function Inventory({ goPage }) {
         ...rec,
         stock_qty: rec.stock_qty ? Number(rec.stock_qty) : 0,
         unit_price: rec.unit_price ? Number(rec.unit_price) : null,
+        cost: rec.cost ? Number(rec.cost) : null,
+        price_factor: rec.price_factor ? Number(rec.price_factor) : null,
         expiry_date: rec.expiry_date || null,
       };
       try {
@@ -577,13 +590,16 @@ function Inventory({ goPage }) {
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
             {[
               ['part_number','Part Number *','text'],
+              ['cat_number','Cat. Number (our reference, shown on quotations)','text'],
               ['serial_number','Serial Number','text'],
               ['description','Description','text'],
               ['supplier_manufacturer','Supplier / MFG','text'],
               ['warehouse_location','W. Location (e.g. BAY05-C03-R04)','text'],
               ['box_number','Box #','text'],
-              ['stock_qty','Stock Qty','number'],
-              ['unit_price','Unit Price (SAR)','number'],
+              ['stock_qty','Stock Qty (0 = catalogued, not physically stocked)','number'],
+              ['cost','Cost','number'],
+              ['price_factor','Price Factor (sales price = cost × factor)','number'],
+              ['unit_price','Unit Price (Sales Price)','number'],
               ['expiry_date','Expiry Date','date'],
               ['received_file_no','File Ref (Received File No.)','text'],
               ['po_number','PO No.','text'],
@@ -598,10 +614,21 @@ function Inventory({ goPage }) {
                   value={itemForm[field]}
                   onChange={e=>setItemForm(f=>({...f,[field]:e.target.value}))}
                   min={type==='number'?0:undefined}
-                  step={field==='unit_price'?'0.01':undefined}
+                  step={['unit_price','cost','price_factor'].includes(field)?'0.01':undefined}
                 />
               </div>
             ))}
+            <div>
+              <label style={lbl}>Currency</label>
+              <select
+                style={inp}
+                value={itemForm.currency}
+                onChange={e=>setItemForm(f=>({...f,currency:e.target.value}))}
+              >
+                <option value="">—</option>
+                {CURRENCY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
           </div>
           <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:22}}>
             <button className="nrfq-btn-ghost" onClick={()=>setShowAddItem(false)}>Cancel</button>
