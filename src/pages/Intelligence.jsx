@@ -38,7 +38,7 @@ const SOURCE_CHECKS = [
   { key: 'accounting', label: 'Accounting System', path: '/api/v1/accounting/kpis' },
   { key: 'crm',        label: 'Sales CRM',          path: '/api/v1/crm/kpis' },
   { key: 'inventory',  label: 'Inventory DB',        path: '/api/v1/inventory/kpis' },
-  { key: 'odoo',       label: 'External API (Odoo)', path: '/api/v1/odoo/invoices/kpis' },
+  { key: 'invoicing',  label: 'Invoicing',           path: '/api/v1/sales/invoices/kpis' },
 ];
 
 /** Simple least-squares linear fit. Returns null if fewer than 2 points or zero x-variance. */

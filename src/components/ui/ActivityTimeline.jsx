@@ -22,6 +22,10 @@ const ACTION_ICON = {
   updated:          '✎',
   stage_changed:    '→',
   supplier_selected:'✓',
+  posted:           '✓',
+  cancelled:        '⊘',
+  payment_recorded: '＋',
+  payment_removed:  '−',
 };
 
 function timeAgo(iso) {

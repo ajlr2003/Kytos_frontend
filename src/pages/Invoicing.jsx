@@ -1,26 +1,40 @@
 /**
  * @file src/pages/Invoicing.jsx
  *
- * Invoicing module — powered by Odoo. All invoice data lives in the
- * connected Odoo instance; this page proxies through the Kytos FastAPI
- * backend which handles authentication and data normalisation.
+ * Invoicing module — Kytos' own customer invoicing (replaces the old Odoo
+ * proxy). Invoices are created as drafts on a form laid out like the printed
+ * bilingual invoice, confirmed ("posted") to lock them — and get an
+ * INV-YYYY-NNNN number unless one was typed — then settled by manually
+ * recording payments against them.
  *
- * API endpoints consumed (via Kytos backend):
- *   GET  /api/v1/odoo/invoices           — list invoices from Odoo
- *   GET  /api/v1/odoo/invoices?status=X  — filtered by Draft|Sent|Paid|Overdue
- *   POST /api/v1/odoo/invoices           — create invoice in Odoo
- *   POST /api/v1/odoo/invoices/{id}/confirm — post (confirm) draft invoice
- *   GET  /api/v1/odoo/invoices/kpis      — KPI totals from Odoo
- *   GET  /api/v1/odoo/partners           — Odoo contacts for autocomplete
- *   GET  /api/v1/auth/me                 — current user for toolbar
+ * API (all under /api/v1/sales/invoices, see backend routers/sales_invoices.py):
+ *   GET    /                    list  (?status=Draft|Open|Overdue|Paid|Cancelled&limit=)
+ *   GET    /kpis                headline totals (SAR)
+ *   GET    /company             seller block + bank accounts (read-only on the form)
+ *   POST   /                    create draft            PUT /{id}   edit draft
+ *   DELETE /{id}                delete draft
+ *   POST   /{id}/post           confirm — assigns invoice number
+ *   POST   /{id}/cancel         cancel (only when unpaid)
+ *   POST   /{id}/payments       record payment          DELETE /{id}/payments/{pid}
+ *   GET    /{id}/pdf            download PDF
+ * Also: GET /api/v1/sales/orders (pre-fill an invoice from an order),
+ *       GET /api/v1/auth/me     (current user / role gating).
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
+import ActivityTimeline from '../components/ui/ActivityTimeline';
 import { API_BASE } from '../config';
+import { CURRENCY_SYMBOLS } from '../constants';
 import '../styles/Invoicing.css';
+
+const INV_API = `${API_BASE}/api/v1/sales/invoices`;
+const WRITE_ROLES = ['admin', 'manager', 'finance'];
+const PAYMENT_METHODS = [
+  ['bank_transfer', 'Bank transfer'], ['cash', 'Cash'], ['cheque', 'Cheque'], ['card', 'Card'], ['other', 'Other'],
+];
 
 /* === Helpers === */
 
@@ -29,51 +43,227 @@ function authHeaders() {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
 }
 
-function fmtCurrency(n) {
-  return `$${parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Turn a FastAPI error body (string or validation-error list) into one message. */
+function errMessage(data, fallback) {
+  const d = data?.detail;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) return d.map(e => `${(e.loc || []).slice(1).join(' › ')}: ${e.msg}`).join('; ');
+  return fallback;
+}
+
+/** fetch → parsed JSON, throwing an Error whose message is the API's `detail`. */
+async function api(url, options = {}) {
+  const res = await fetch(url, { ...options, headers: { ...authHeaders(), ...(options.headers || {}) } });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(errMessage(data, `Request failed (${res.status})`));
+  return data;
+}
+
+function fmtMoney(n, currency = 'SAR') {
+  const sym = CURRENCY_SYMBOLS[currency] ?? `${currency} `;
+  const v = parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${sym}${v}`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function fmtNum(n) {
+  return parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function downloadPdf(inv) {
+  const res = await fetch(`${INV_API}/${inv.id}/pdf`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(errMessage(await res.json().catch(() => ({})), 'Could not generate PDF'));
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `${(inv.invoice_number || 'invoice-draft').replace(/\//g, '-')}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const STATUS_BADGE_CLS = { Draft: 'ib-draft', Open: 'ib-sent', Overdue: 'ib-over', Paid: 'ib-paid', Cancelled: 'ib-cancelled' };
+
+function StatusBadge({ status }) {
+  return <span className={`inv-badge ${STATUS_BADGE_CLS[status] || 'ib-draft'}`}>{status}</span>;
+}
+
+function ErrorBar({ msg }) {
+  return msg ? <div className="inv-error">{msg}</div> : null;
 }
 
 
-/* === New Invoice modal === */
+/* === New / Edit invoice modal — laid out like the printed invoice === */
+
+const UOMS = ['Units', 'EA', 'LOT', 'PCS', 'DAYS', 'MONTH'];
+const PAYMENT_TERMS = ['Immediate Payment', 'Net 15', 'Net 30', 'Net 45', 'Net 60', 'Due on Receipt'];
+const PEGGED_RATES = { SAR: 1, USD: 3.75, AED: 1.0211 };     // SAR per 1 unit; others are typed in
+const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const blankRow = () => ({ key: Math.random(), catalog_no: '', text: '', qty: 1, unit: 'Units', unit_price: '', discount: '' });
+
+/** First line of the description box is the item name, the rest its description. */
+function splitItemText(text) {
+  const lines = text.trim().split('\n');
+  return [lines[0].trim().slice(0, 255), lines.slice(1).join('\n').trim()];
+}
+
+/** Line maths — mirrors the server (which is the source of truth on save). */
+function lineCalc(row, vatRate) {
+  const qty  = parseFloat(row.qty) || 0;
+  const up   = parseFloat(row.unit_price) || 0;
+  const disc = Math.min(100, Math.max(0, parseFloat(row.discount) || 0));
+  const taxable = r2(r2(up * (1 - disc / 100)) * qty);
+  const tax = r2(taxable * vatRate / 100);
+  return { gross: r2(qty * up), taxable, tax, incl: r2(taxable + tax) };
+}
+
+/** English label with its Arabic twin on the right, as on the printed invoice. */
+function BiField({ en, ar, required, hint, span2, children }) {
+  return (
+    <div className="acc-form-group" style={span2 ? { gridColumn: '1 / -1' } : undefined}>
+      <label className="inv-bilabel"><span>{en}{required && ' *'}</span>{ar && <span className="inv-ar" dir="rtl" lang="ar">{ar}</span>}</label>
+      {children}
+      {hint && <div className="inv-hint">{hint}</div>}
+    </div>
+  );
+}
+
+const ADDRESS_LABELS = [
+  ['Building No.', 'رقم المبنى'], ['Street Name', 'اسم الشارع'], ['District', 'الحي'], ['City', 'المدينة'],
+  ['Country', 'البلد'], ['Postal Code', 'الرمز البريدي'], ['Vat Number', 'رقم تسجيل ضريبة القيمة المضافة'], ['CR No.', 'السجل التجاري'],
+];
 
 /**
  * @param {object}   props
- * @param {object[]} props.partners - Odoo contacts for autocomplete.
- * @param {Function} props.onClose  - Close the modal.
- * @param {Function} props.onSaved  - Called with the new invoice object from Odoo.
+ * @param {object=}  props.invoice       - Existing draft to edit; omit to create.
+ * @param {object[]} props.orders        - Sales orders, for "start from an order".
+ * @param {string[]} props.customerNames - Known customer names (autocomplete).
+ * @param {object=}  props.seller        - Seller block + bank accounts (read-only, from server settings).
+ * @param {Function} props.onClose
+ * @param {Function} props.onSaved       - Called with the saved invoice.
  */
-function NewInvoiceModal({ partners, onClose, onSaved }) {
-  const [form, setForm] = useState({ client: '', amount: '', due: '', desc: '', payment_terms: 'Net 30' });
+function InvoiceFormModal({ invoice, orders, customerNames, seller, onClose, onSaved }) {
+  const isEdit = !!invoice;
+  const [form, setForm] = useState(() => ({
+    invoice_number:       invoice?.invoice_number       ?? '',
+    invoice_date:         invoice?.invoice_date         ?? todayISO(),
+    delivery_note_no:     invoice?.delivery_note_no     ?? '',
+    delivery_date:        invoice?.delivery_date        ?? '',
+    payment_terms:        invoice?.payment_terms        ?? 'Immediate Payment',
+    due_date:             invoice?.due_date             ?? '',
+    your_ref:             invoice?.your_ref             ?? '',
+    vendor_number:        invoice?.vendor_number        ?? '',
+    internal_reference:   invoice?.internal_reference   ?? '',
+    currency:             invoice?.currency             ?? 'SAR',
+    exchange_rate:        invoice ? String(invoice.exchange_rate) : '1',
+    gr_ses:               invoice?.gr_ses               ?? '',
+    customer_name:        invoice?.customer_name        ?? '',
+    customer_building_no: invoice?.customer_building_no ?? '',
+    customer_street:      invoice?.customer_street      ?? '',
+    customer_district:    invoice?.customer_district    ?? '',
+    customer_city:        invoice?.customer_city        ?? '',
+    customer_country:     invoice?.customer_country     ?? 'Saudi Arabia',
+    customer_postal_code: invoice?.customer_postal_code ?? '',
+    customer_tax_id:      invoice?.customer_tax_id      ?? '',
+    customer_cr_no:       invoice?.customer_cr_no       ?? '',
+    vat_rate:             String(invoice?.vat_rate ?? 15),
+    remarks:              invoice?.remarks              ?? '',
+    sales_order_id:       invoice?.sales_order_id       ?? null,
+  }));
+  const [rows, setRows] = useState(() =>
+    invoice?.items?.length
+      ? invoice.items.map(i => ({
+          key: i.id, catalog_no: i.catalog_no ?? '', text: i.item_name + (i.description ? `\n${i.description}` : ''),
+          qty: i.qty, unit: i.unit, unit_price: i.unit_price, discount: i.discount || '',
+        }))
+      : [blankRow()]
+  );
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
   const [error,  setError]  = useState('');
-  const [suggestions, setSuggestions] = useState([]);
-  const [clientSelected, setClientSelected] = useState(false);
 
-  function onClientChange(val) {
-    setForm(f => ({ ...f, client: val }));
-    setClientSelected(false);
-    if (val.length > 1) {
-      setSuggestions(partners.filter(p => p.name.toLowerCase().includes(val.toLowerCase())).slice(0, 5));
-    } else {
-      setSuggestions([]);
-    }
+  const setF   = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const setRow = (key, k, v) => setRows(rs => rs.map(r => r.key === key ? { ...r, [k]: v } : r));
+  const bind   = k => ({ value: form[k], onChange: e => setF(k, e.target.value) });
+
+  function changeCurrency(cur) {
+    setForm(f => ({ ...f, currency: cur, exchange_rate: PEGGED_RATES[cur] != null ? String(PEGGED_RATES[cur]) : '' }));
+  }
+
+  const cur      = form.currency;
+  const foreign  = cur !== 'SAR';
+  const vatRate  = parseFloat(form.vat_rate) || 0;
+  const fxRate   = foreign ? (parseFloat(form.exchange_rate) || 0) : 1;
+  const calcs    = rows.map(r => lineCalc(r, vatRate));
+  const gross    = r2(calcs.reduce((s, c) => s + c.gross, 0));
+  const taxable  = r2(calcs.reduce((s, c) => s + c.taxable, 0));
+  const discount = r2(gross - taxable);
+  const vat      = r2(calcs.reduce((s, c) => s + c.tax, 0));
+  const total    = r2(taxable + vat);
+  const bank     = seller?.bank_accounts?.find(a => a.currency === cur);
+
+  function startFromOrder(orderId) {
+    const o = orders.find(x => x.id === orderId);
+    if (!o) { setF('sales_order_id', null); return; }
+    setForm(f => ({
+      ...f,
+      sales_order_id: o.id,
+      customer_name:  o.customer_name || f.customer_name,
+      currency:       o.currency || f.currency,
+      exchange_rate:  PEGGED_RATES[o.currency] != null ? String(PEGGED_RATES[o.currency]) : '',
+      payment_terms:  o.payment_terms || f.payment_terms,
+      vat_rate:       String(Number(o.subtotal) > 0 ? Math.round((Number(o.vat) / Number(o.subtotal)) * 10000) / 100 : 15),
+    }));
+    setRows((o.items || []).length
+      ? o.items.map(i => ({
+          key: Math.random(), catalog_no: i.catalog_no ?? '', text: (i.item_name ?? '') + (i.description ? `\n${i.description}` : ''),
+          qty: i.qty, unit: i.unit || 'Units', unit_price: i.unit_price, discount: i.discount || '',
+        }))
+      : [blankRow()]);
   }
 
   async function save() {
-    if (!form.client.trim() || !form.amount) { setError('Client and amount are required.'); return; }
-    if (!clientSelected && suggestions.length > 0) { setError('Please select a client from the dropdown suggestions — free-text names are not valid Odoo contacts.'); return; }
+    if (!form.customer_name.trim()) { setError('Buyer name is required.'); return; }
+    if (foreign && !(fxRate > 0)) { setError(`Enter the ${cur} to SAR exchange rate — it is used for the amounts printed in SAR.`); return; }
+    const valid = rows.filter(r => r.text.trim() && parseFloat(r.qty) > 0 && r.unit_price !== '' && parseFloat(r.unit_price) >= 0);
+    if (valid.length === 0) { setError('Add at least one line with an item description, a quantity above 0 and a unit price.'); return; }
+
     setSaving(true); setError('');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/odoo/invoices`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ client: form.client, amount: parseFloat(form.amount), due: form.due || undefined, desc: form.desc || undefined, payment_terms: form.payment_terms || undefined }),
+      const body = {
+        ...form,
+        invoice_number: form.invoice_number.trim() || null,
+        invoice_date:   form.invoice_date || null,
+        delivery_date:  form.delivery_date || null,
+        due_date:       form.due_date || null,
+        exchange_rate:  foreign ? fxRate : null,
+        vat_rate:       vatRate,
+        items: valid.map(r => {
+          const [name, description] = splitItemText(r.text);
+          return {
+            catalog_no: r.catalog_no.trim() || null, item_name: name, description: description || null,
+            qty: parseFloat(r.qty), unit: r.unit, unit_price: parseFloat(r.unit_price), discount: parseFloat(r.discount) || 0,
+          };
+        }),
+      };
+      const saved = await api(isEdit ? `${INV_API}/${invoice.id}` : INV_API, {
+        method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to create invoice');
-      const inv = await res.json();
-      setSaved(true);
-      setTimeout(() => { onSaved(inv); onClose(); }, 900);
+      onSaved(saved, isEdit);
+      onClose();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -81,270 +271,552 @@ function NewInvoiceModal({ partners, onClose, onSaved }) {
     }
   }
 
+  const sellerRows = seller ? [
+    ['Name', 'الاسم', seller.name], ['Building No.', 'رقم المبنى', seller.building], ['Street Name', 'اسم الشارع', seller.street],
+    ['District', 'الحي', seller.district], ['City', 'المدينة', seller.city], ['Country', 'البلد', seller.country],
+    ['Postal Code', 'الرمز البريدي', seller.postal_code], ['Vat Number', 'رقم تسجيل ضريبة القيمة المضافة', seller.vat_number],
+    ['CR No.', 'السجل التجاري', seller.cr_no],
+  ] : [];
+
   return (
-    <Modal title="New Invoice" onClose={onClose}>
-      {saved ? (
-        <div className="acc-form-success">
-          <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          <div>Invoice created in Odoo!</div>
+    <Modal title={isEdit ? 'Edit Draft Invoice' : 'New Invoice'} onClose={onClose}>
+      <ErrorBar msg={error} />
+
+      <div className="inv-invoice-title"><span dir="rtl" lang="ar">فاتورة</span><span>Invoice</span></div>
+
+      {!isEdit && orders.length > 0 && (
+        <div className="acc-form-group">
+          <label>Start from a sales order (optional)</label>
+          <select value={form.sales_order_id || ''} onChange={e => startFromOrder(e.target.value)}>
+            <option value="">— Blank invoice —</option>
+            {orders.filter(o => o.status !== 'cancelled').map(o => (
+              <option key={o.id} value={o.id}>{o.order_number} — {o.customer_name || 'Unknown'} ({fmtMoney(o.total, o.currency)})</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* ── Header references ── */}
+      <div className="acc-form-grid inv-grid-3">
+        <BiField en="Invoice Number" ar="رقم الفاتورة" hint="Leave blank to auto-number (INV-YYYY-NNNN) when confirmed">
+          <input type="text" placeholder="e.g. 2025/1838/5" {...bind('invoice_number')} />
+        </BiField>
+        <BiField en="Invoice Date" ar="تاريخ الفاتورة"><input type="date" {...bind('invoice_date')} /></BiField>
+        <BiField en="Delivery Note No" ar="رقم إيصال التوصيل"><input type="text" {...bind('delivery_note_no')} /></BiField>
+        <BiField en="Delivery Date" ar="تاريخ التوصيل"><input type="date" {...bind('delivery_date')} /></BiField>
+        <BiField en="Term of Payment" ar="طريقة الدفع">
+          <select {...bind('payment_terms')}>
+            {form.payment_terms && !PAYMENT_TERMS.includes(form.payment_terms) && <option>{form.payment_terms}</option>}
+            {PAYMENT_TERMS.map(t => <option key={t}>{t}</option>)}
+          </select>
+        </BiField>
+        <BiField en="Due Date" ar="تاريخ الاستحقاق" hint="Blank = worked out from the payment terms"><input type="date" {...bind('due_date')} /></BiField>
+        <BiField en="Customer's PO Ref" ar="رقم أمر الشراء"><input type="text" {...bind('your_ref')} /></BiField>
+        <BiField en="Vendor Number for Al Sinan" ar="رقم المورد للشركة السنان"><input type="text" {...bind('vendor_number')} /></BiField>
+        <BiField en="Internal Reference Number For Al Sinan" ar="الرقم الإشاري للشركة"><input type="text" {...bind('internal_reference')} /></BiField>
+        <BiField en="Invoice Currency" ar="عملة الفاتورة">
+          <select value={cur} onChange={e => changeCurrency(e.target.value)}>
+            {Object.keys(CURRENCY_SYMBOLS).map(c => <option key={c}>{c}</option>)}
+          </select>
+        </BiField>
+        {foreign ? (
+          <BiField en={`Exchange rate (1 ${cur} = ? SAR)`} required hint="Used for the VAT and total printed in SAR">
+            <input type="number" min="0" step="0.0001" {...bind('exchange_rate')} />
+          </BiField>
+        ) : <div />}
+        <BiField en="GR/SES" ar="إشعار استلام البضائع/ورقة دخول الخدمة"><input type="text" {...bind('gr_ses')} /></BiField>
+      </div>
+
+      {/* ── Seller (fixed) / Buyer ── */}
+      <div className="inv-parties">
+        <div>
+          <div className="inv-band"><span>Seller</span><span dir="rtl" lang="ar">البائع</span></div>
+          <div className="inv-kv">
+            {sellerRows.map(([en, ar, val]) => (
+              <div key={en}><span>{en}</span><strong>{val || '—'}</strong><span className="inv-ar" dir="rtl" lang="ar">{ar}</span></div>
+            ))}
+            {!seller && <div className="inv-hint" style={{ padding: 10 }}>Loading seller details…</div>}
+          </div>
+        </div>
+        <div>
+          <div className="inv-band"><span>Buyer\ Bill to</span><span dir="rtl" lang="ar">المشتري / فاتورة إلى</span></div>
+          <div className="inv-buyer">
+            <BiField en="Name" ar="الاسم" required span2>
+              <input type="text" list="inv-customer-names" placeholder="Company name" autoComplete="off" {...bind('customer_name')} />
+              <datalist id="inv-customer-names">{customerNames.map(n => <option key={n} value={n} />)}</datalist>
+            </BiField>
+            {[['customer_building_no', 0], ['customer_street', 1], ['customer_district', 2], ['customer_city', 3],
+              ['customer_country', 4], ['customer_postal_code', 5], ['customer_tax_id', 6], ['customer_cr_no', 7]].map(([k, i]) => (
+              <BiField key={k} en={ADDRESS_LABELS[i][0]} ar={ADDRESS_LABELS[i][1]}><input type="text" {...bind(k)} /></BiField>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Line items ── */}
+      <div className="inv-band inv-band-center"><span>Line items</span></div>
+      <div className="inv-lines-wrap">
+        <table className="inv-lines">
+          <thead>
+            <tr>
+              <th style={{ width: 34 }}>Serial Number<em dir="rtl" lang="ar">الرقم التسلسلي</em></th>
+              <th style={{ width: 96 }}>Material Number<em dir="rtl" lang="ar">رقم المواد</em></th>
+              <th style={{ minWidth: 250 }}>Item Description<em dir="rtl" lang="ar">وصف الصنف</em></th>
+              <th style={{ width: 96 }}>Unit Price<em dir="rtl" lang="ar">سعر الوحدة</em></th>
+              <th style={{ width: 70 }}>Quantity<em dir="rtl" lang="ar">الكمية</em></th>
+              <th style={{ width: 86 }}>UOM<em dir="rtl" lang="ar">وحدة القياس</em></th>
+              <th style={{ width: 66 }}>Disc %<em dir="rtl" lang="ar">خصم</em></th>
+              <th style={{ width: 104, textAlign: 'right' }}>Taxable Amount<em dir="rtl" lang="ar">المبلغ الخاضع للضريبة</em></th>
+              <th style={{ width: 64, textAlign: 'center' }}>Tax Rate<em dir="rtl" lang="ar">نسبة الضريبة</em></th>
+              <th style={{ width: 92, textAlign: 'right' }}>Tax Amount<em dir="rtl" lang="ar">مبلغ الضريبة</em></th>
+              <th style={{ width: 112, textAlign: 'right' }}>Item Subtotal (Including Vat)<em dir="rtl" lang="ar">المجموع (شامل ضريبة)</em></th>
+              <th style={{ width: 30 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.key}>
+                <td className="inv-lines-no">{i + 1}</td>
+                <td><input value={r.catalog_no} onChange={e => setRow(r.key, 'catalog_no', e.target.value)} /></td>
+                <td><textarea rows={2} placeholder="Item name — extra lines become its description" value={r.text} onChange={e => setRow(r.key, 'text', e.target.value)} /></td>
+                <td><input type="number" min="0" step="0.01" placeholder="0.00" value={r.unit_price} onChange={e => setRow(r.key, 'unit_price', e.target.value)} /></td>
+                <td><input type="number" min="0" step="any" value={r.qty} onChange={e => setRow(r.key, 'qty', e.target.value)} /></td>
+                <td>
+                  <select value={r.unit} onChange={e => setRow(r.key, 'unit', e.target.value)}>
+                    {!UOMS.includes(r.unit) && <option>{r.unit}</option>}
+                    {UOMS.map(u => <option key={u}>{u}</option>)}
+                  </select>
+                </td>
+                <td><input type="number" min="0" max="100" step="0.1" placeholder="0" value={r.discount} onChange={e => setRow(r.key, 'discount', e.target.value)} /></td>
+                <td className="inv-lines-amt">{fmtNum(calcs[i].taxable)}</td>
+                <td className="inv-lines-mid">VAT {vatRate}%</td>
+                <td className="inv-lines-amt">{fmtNum(calcs[i].tax)}</td>
+                <td className="inv-lines-amt">{fmtNum(calcs[i].incl)}</td>
+                <td>
+                  <button className="inv-lines-del" title="Remove line" disabled={rows.length === 1}
+                    onClick={() => setRows(rs => rs.filter(x => x.key !== r.key))}>×</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button className="inv-add-line" onClick={() => setRows(rs => [...rs, blankRow()])}>+ Add line</button>
+
+      {/* ── Totals ── */}
+      <div className="inv-band"><span>Total Amounts</span><span dir="rtl" lang="ar">إجمالي المبلغ</span></div>
+      <div className="inv-kv inv-kv-totals">
+        {[
+          ['Total (Excluding Vat)', 'الإجمالي (غير شامل ضريبة القيمة المضافة)', gross, cur],
+          ['Discount', 'مجموع الخصومات', discount, cur],
+          ['Total Taxable Amount (Excluding Vat)', 'الإجمالي الخاضع للضريبة', taxable, cur],
+        ].map(([en, ar, v, c]) => (
+          <div key={en}><span>{en}</span><span className="inv-ar" dir="rtl" lang="ar">{ar}</span><strong>{fmtNum(v)} {c}</strong></div>
+        ))}
+        <div>
+          <span>Total Vat <input className="inv-vat-input" type="number" min="0" max="100" step="0.5" value={form.vat_rate}
+            onChange={e => setF('vat_rate', e.target.value)} />%</span>
+          <span className="inv-ar" dir="rtl" lang="ar">مجموع ضريبة القيمة المضافة</span><strong>{fmtNum(vat)} {cur}</strong>
+        </div>
+        {foreign && <div><span>Total Vat {vatRate}% in SAR</span><span className="inv-ar" dir="rtl" lang="ar">مجموع ضريبة القيمة المضافة بالريال السعودي</span><strong>{fmtNum(r2(vat * fxRate))} SAR</strong></div>}
+        <div className="inv-kv-grand"><span>Total Amount Due</span><span className="inv-ar" dir="rtl" lang="ar">إجمالي المبلغ المستحق</span><strong>{fmtNum(total)} {cur}</strong></div>
+        {foreign && <div className="inv-kv-grand"><span>Total Amount Due in SAR</span><span className="inv-ar" dir="rtl" lang="ar">إجمالي المبلغ المستحق بالريال السعودي</span><strong>{fmtNum(r2(total * fxRate))} SAR</strong></div>}
+      </div>
+      <div className="inv-hint">The amount in words (English and Arabic) is added automatically on the printed invoice.</div>
+
+      {/* ── Bank details (fixed, by currency) ── */}
+      <div className="inv-band inv-band-center"><span>Bank Details</span><span dir="rtl" lang="ar">تفاصيل البنك</span></div>
+      {bank ? (
+        <div className="inv-kv inv-kv-bank">
+          {[['Name', bank.account_name], ['A/C No', bank.account_no], ['SWIFT CODE', bank.swift], ['BANK', bank.bank], ['BRANCH', bank.branch], ['IBAN No', bank.iban]].map(([k, v]) => (
+            <div key={k}><span>{k}</span><strong>{v || '—'}</strong></div>
+          ))}
         </div>
       ) : (
-        <>
-          {error && <div style={{background:'#fef2f2',color:'#dc2626',padding:'10px 14px',borderRadius:'8px',marginBottom:'14px',fontSize:'13px'}}>{error}</div>}
-          <div className="acc-form-group" style={{position:'relative'}}>
-            <label>Client / Company *</label>
-            <input type="text" placeholder="Type to search Odoo contacts…" value={form.client} onChange={e => onClientChange(e.target.value)} autoComplete="off" />
-            {suggestions.length > 0 && (
-              <div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:'1px solid #e5e7eb',borderRadius:'8px',boxShadow:'0 4px 12px rgba(0,0,0,.08)',zIndex:100,marginTop:'2px'}}>
-                {suggestions.map(p => (
-                  <div key={p.id} style={{padding:'9px 14px',fontSize:'13px',cursor:'pointer',borderBottom:'1px solid #f3f4f6'}}
-                    onMouseDown={() => { setForm(f => ({ ...f, client: p.name })); setSuggestions([]); setClientSelected(true); }}>
-                    {p.name}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="acc-form-grid">
-            <div className="acc-form-group">
-              <label>Amount (SAR) *</label>
-              <input type="number" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
-            </div>
-            <div className="acc-form-group">
-              <label>Due Date</label>
-              <input type="date" value={form.due} onChange={e => setForm(f => ({ ...f, due: e.target.value }))} />
-            </div>
-          </div>
-          <div className="acc-form-group">
-            <label>Description</label>
-            <input type="text" placeholder="Services rendered…" value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} />
-          </div>
-          <div className="acc-form-group">
-            <label>Payment Terms</label>
-            <select value={form.payment_terms} onChange={e => setForm(f => ({ ...f, payment_terms: e.target.value }))}>
-              <option>Net 30</option><option>Net 15</option><option>Net 60</option><option>Due on Receipt</option>
-            </select>
-          </div>
-          <div className="acc-modal-actions">
-            <button className="acc-btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="acc-btn-save" onClick={save} disabled={saving}>{saving ? 'Creating in Odoo…' : 'Create Invoice'}</button>
-          </div>
-        </>
+        <div className="inv-hint" style={{ margin: '6px 0 4px' }}>
+          {seller ? `No ${cur} bank account is configured, so the printed invoice will have no bank details.` : 'Loading…'}
+        </div>
       )}
+
+      {/* ── Notes ── */}
+      <div className="acc-form-group" style={{ marginTop: 16 }}>
+        <label className="inv-bilabel"><span>Notes</span><span className="inv-ar" dir="rtl" lang="ar">ملاحظات</span></label>
+        <textarea className="inv-notes-input" rows={2} {...bind('remarks')} />
+      </div>
+
+      <div className="acc-modal-actions">
+        <button className="acc-btn-cancel" onClick={onClose} disabled={saving}>Cancel</button>
+        <button className="acc-btn-save" onClick={save} disabled={saving}>{saving ? 'Saving…' : isEdit ? 'Save changes' : 'Save as draft'}</button>
+      </div>
     </Modal>
   );
 }
 
 
-/* === Confirm invoice modal === */
+/* === Invoice detail modal === */
 
 /**
  * @param {object}   props
- * @param {object}   props.inv      - Invoice to confirm.
- * @param {Function} props.onClose  - Close the modal.
- * @param {Function} props.onDone   - Called with updated invoice after confirm.
+ * @param {string}   props.invoiceId
+ * @param {boolean}  props.canWrite  - Current user may modify invoices.
+ * @param {Function} props.onClose
+ * @param {Function} props.onChanged - Called after any mutation so the list refreshes.
+ * @param {Function} props.onEdit    - Called with the invoice to open the edit form.
+ * @param {Function} props.showToast
  */
-function ConfirmInvoiceModal({ inv, onClose, onDone }) {
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
+function InvoiceDetailModal({ invoiceId, canWrite, onClose, onChanged, onEdit, showToast }) {
+  const [inv, setInv]           = useState(null);
+  const [error, setError]       = useState('');
+  const [busy, setBusy]         = useState(false);
+  const [confirming, setConfirming] = useState(null);   // 'post' | 'cancel' | 'delete'
+  const [showPay, setShowPay]   = useState(false);
+  const [pay, setPay]           = useState({ amount: '', payment_date: todayISO(), method: 'bank_transfer', reference: '', notes: '' });
 
-  async function confirm() {
-    setLoading(true); setError('');
+  useEffect(() => {
+    api(`${INV_API}/${invoiceId}`).then(setInv).catch(e => setError(e.message));
+  }, [invoiceId]);
+
+  /** Run a mutation, swap in the returned invoice, refresh the list behind us. */
+  async function run(fn, successMsg) {
+    setBusy(true); setError('');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/odoo/invoices/${inv.id}/confirm`, {
-        method: 'POST', headers: authHeaders(),
-      });
-      if (!res.ok) throw new Error((await res.json()).detail || 'Confirm failed');
-      onDone(await res.json());
-      onClose();
+      const updated = await fn();
+      if (updated) setInv(updated);
+      setConfirming(null);
+      onChanged();
+      if (successMsg) showToast(typeof successMsg === 'function' ? successMsg(updated) : successMsg);
+      return updated;
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
+  const post   = () => run(() => api(`${INV_API}/${inv.id}/post`,   { method: 'POST' }), u => `Invoice ${u.invoice_number} confirmed`);
+  const cancel = () => run(() => api(`${INV_API}/${inv.id}/cancel`, { method: 'POST' }), 'Invoice cancelled');
+  const remove = async () => {
+    setBusy(true); setError('');
+    try { await api(`${INV_API}/${inv.id}`, { method: 'DELETE' }); onChanged(); showToast('Draft deleted'); onClose(); }
+    catch (e) { setError(e.message); setBusy(false); }
+  };
+  const voidPayment = id => run(() => api(`${INV_API}/${inv.id}/payments/${id}`, { method: 'DELETE' }), 'Payment removed');
+  async function recordPayment() {
+    const amount = parseFloat(pay.amount);
+    if (!(amount > 0)) { setError('Enter a payment amount above 0.'); return; }
+    const updated = await run(() => api(`${INV_API}/${inv.id}/payments`, {
+      method: 'POST',
+      body: JSON.stringify({ ...pay, amount, reference: pay.reference.trim() || null, notes: pay.notes.trim() || null }),
+    }), 'Payment recorded');
+    if (updated) { setShowPay(false); setPay(p => ({ ...p, amount: '', reference: '', notes: '' })); }
+  }
+
+  async function pdf() {
+    showToast('Generating PDF…');
+    try { await downloadPdf(inv); } catch (e) { setError(e.message); }
+  }
+
+  if (!inv) {
+    return (
+      <Modal title="Invoice" onClose={onClose}>
+        {error ? <ErrorBar msg={error} /> : <div className="inv-empty">Loading…</div>}
+      </Modal>
+    );
+  }
+
+  const cur = inv.currency;
+  const isDraft = inv.status === 'draft', isPosted = inv.status === 'posted', isPaid = inv.status === 'paid';
+
   return (
-    <Modal title="Confirm Invoice" onClose={onClose}>
-      {/* Invoice summary card */}
-      <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:'10px',padding:'16px',marginBottom:'16px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
-          <span style={{fontSize:'12px',fontWeight:600,color:'#6b7280',textTransform:'uppercase',letterSpacing:'0.05em'}}>Invoice</span>
-          <span style={{fontSize:'13px',fontWeight:700,color:'#1e293b'}}>{inv.num}</span>
+    <Modal title={inv.invoice_number ? `Invoice ${inv.invoice_number}` : 'Draft invoice'} onClose={onClose}>
+      <div className="inv-detail-head">
+        <div>
+          <div className="inv-detail-cust">{inv.customer_name}</div>
+          {inv.your_ref && <div className="inv-detail-sub">Customer's PO Ref: {inv.your_ref}</div>}
         </div>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-          <span style={{fontSize:'12px',color:'#6b7280'}}>Client</span>
-          <span style={{fontSize:'13px',fontWeight:600,color:'#374151'}}>{inv.company}</span>
-        </div>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <span style={{fontSize:'12px',color:'#6b7280'}}>Amount</span>
-          <span style={{fontSize:'15px',fontWeight:700,color:'#16a34a'}}>{inv.amount}</span>
-        </div>
-      </div>
-
-      <p style={{fontSize:'13px',color:'#6b7280',marginBottom:'16px',lineHeight:'1.5'}}>
-        Posting this invoice in Odoo is <strong style={{color:'#b45309'}}>irreversible</strong> — it will be assigned a sequential invoice number and can no longer be edited.
-      </p>
-
-      {error && <div style={{background:'#fef2f2',color:'#dc2626',padding:'10px 14px',borderRadius:'8px',marginBottom:'12px',fontSize:'13px'}}>{error}</div>}
-
-      <div className="acc-modal-actions">
-        <button className="acc-btn-cancel" onClick={onClose} disabled={loading}>Cancel</button>
-        <button
-          onClick={confirm}
-          disabled={loading}
-          style={{display:'flex',alignItems:'center',gap:'6px',padding:'9px 20px',background: loading ? '#9ca3af' : '#7c3aed',color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor: loading ? 'not-allowed' : 'pointer',transition:'background 0.15s'}}
-        >
-          {loading ? (
-            <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{animation:'spin 1s linear infinite'}}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              Confirming…
-            </>
-          ) : (
-            <>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-              Post Invoice in Odoo
-            </>
+        <div className="inv-detail-amt">
+          <StatusBadge status={inv.display_status} />
+          <div className="inv-amount">{fmtMoney(inv.total, cur)}</div>
+          {(isPosted || isPaid) && inv.amount_paid > 0 && (
+            <div className="inv-detail-paid">Paid {fmtMoney(inv.amount_paid, cur)} · Balance {fmtMoney(inv.balance, cur)}</div>
           )}
-        </button>
+        </div>
       </div>
-    </Modal>
-  );
-}
 
+      <ErrorBar msg={error} />
 
-/* === Dunning reminders panel === */
-
-function RemindersPanel({ onClose }) {
-  const [cfg, setCfg] = useState({ before: '2', after: '5', final: '14', email: true, sms: false });
-  const [saved, setSaved] = useState(false);
-  return (
-    <div className="inv-reminders-panel">
-      <div className="inv-reminders-header">
-        <span>Configure Dunning Reminders</span>
-        <button onClick={onClose}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-      </div>
-      {saved ? (
-        <div style={{textAlign:'center',padding:'16px 0',color:'#16a34a',fontWeight:600,fontSize:'13.5px'}}>✓ Settings saved</div>
-      ) : (
-        <>
-          <div className="acc-form-group" style={{marginBottom:'10px'}}>
-            <label style={{fontSize:'12px'}}>Send reminder X days <em>before</em> due</label>
-            <select value={cfg.before} onChange={e=>setCfg({...cfg,before:e.target.value})}>{['1','2','3','5','7'].map(v=><option key={v}>{v}</option>)}</select>
-          </div>
-          <div className="acc-form-group" style={{marginBottom:'10px'}}>
-            <label style={{fontSize:'12px'}}>First overdue notice after X days</label>
-            <select value={cfg.after} onChange={e=>setCfg({...cfg,after:e.target.value})}>{['1','3','5','7','10'].map(v=><option key={v}>{v}</option>)}</select>
-          </div>
-          <div className="acc-form-group" style={{marginBottom:'12px'}}>
-            <label style={{fontSize:'12px'}}>Final notice after X days overdue</label>
-            <select value={cfg.final} onChange={e=>setCfg({...cfg,final:e.target.value})}>{['7','10','14','21','30'].map(v=><option key={v}>{v}</option>)}</select>
-          </div>
-          <div style={{display:'flex',gap:'12px',marginBottom:'14px'}}>
-            <label style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'13px',cursor:'pointer'}}><input type="checkbox" checked={cfg.email} onChange={e=>setCfg({...cfg,email:e.target.checked})} style={{accentColor:'#7c3aed'}}/>Email</label>
-            <label style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'13px',cursor:'pointer'}}><input type="checkbox" checked={cfg.sms} onChange={e=>setCfg({...cfg,sms:e.target.checked})} style={{accentColor:'#7c3aed'}}/>SMS</label>
-          </div>
-          <button className="acc-btn-save" style={{width:'100%'}} onClick={()=>setSaved(true)}>Save Settings</button>
-        </>
+      {canWrite && (
+        <div className="inv-action-bar">
+          {isDraft && <>
+            <button className="inv-btn inv-btn-primary" disabled={busy} onClick={() => setConfirming('post')}>Confirm invoice</button>
+            <button className="inv-btn" disabled={busy} onClick={() => onEdit(inv)}>Edit</button>
+            <button className="inv-btn inv-btn-danger" disabled={busy} onClick={() => setConfirming('delete')}>Delete draft</button>
+          </>}
+          {isPosted && <>
+            <button className="inv-btn inv-btn-primary" disabled={busy} onClick={() => { setShowPay(s => !s); setPay(p => ({ ...p, amount: String(inv.balance) })); }}>Record payment</button>
+            {inv.payments.length === 0 && <button className="inv-btn inv-btn-danger" disabled={busy} onClick={() => setConfirming('cancel')}>Cancel invoice</button>}
+          </>}
+          <button className="inv-btn" onClick={pdf}>Download PDF</button>
+        </div>
       )}
-    </div>
+      {!canWrite && <div className="inv-action-bar"><button className="inv-btn" onClick={pdf}>Download PDF</button></div>}
+
+      {confirming === 'post' && (
+        <div className="inv-confirm">
+          <div>Confirming assigns the next invoice number and <strong>locks the invoice against editing</strong>. A confirmed invoice can be cancelled (if unpaid) but never deleted.</div>
+          <div className="inv-confirm-btns">
+            <button className="inv-btn" onClick={() => setConfirming(null)} disabled={busy}>Back</button>
+            <button className="inv-btn inv-btn-primary" onClick={post} disabled={busy}>{busy ? 'Confirming…' : 'Yes, confirm invoice'}</button>
+          </div>
+        </div>
+      )}
+      {confirming === 'cancel' && (
+        <div className="inv-confirm">
+          <div>Cancel invoice <strong>{inv.invoice_number}</strong>? It stays in the list as Cancelled and its number is not reused.</div>
+          <div className="inv-confirm-btns">
+            <button className="inv-btn" onClick={() => setConfirming(null)} disabled={busy}>Back</button>
+            <button className="inv-btn inv-btn-danger" onClick={cancel} disabled={busy}>{busy ? 'Cancelling…' : 'Yes, cancel invoice'}</button>
+          </div>
+        </div>
+      )}
+      {confirming === 'delete' && (
+        <div className="inv-confirm">
+          <div>Permanently delete this draft? This can't be undone.</div>
+          <div className="inv-confirm-btns">
+            <button className="inv-btn" onClick={() => setConfirming(null)} disabled={busy}>Back</button>
+            <button className="inv-btn inv-btn-danger" onClick={remove} disabled={busy}>{busy ? 'Deleting…' : 'Yes, delete draft'}</button>
+          </div>
+        </div>
+      )}
+
+      {showPay && isPosted && (
+        <div className="inv-pay-form">
+          <div className="inv-section-title" style={{ marginTop: 0 }}>Record a payment</div>
+          <div className="acc-form-grid inv-grid-4">
+            <div className="acc-form-group"><label>Amount ({cur}) *</label>
+              <input type="number" min="0" step="0.01" value={pay.amount} onChange={e => setPay(p => ({ ...p, amount: e.target.value }))} /></div>
+            <div className="acc-form-group"><label>Date</label>
+              <input type="date" value={pay.payment_date} onChange={e => setPay(p => ({ ...p, payment_date: e.target.value }))} /></div>
+            <div className="acc-form-group"><label>Method</label>
+              <select value={pay.method} onChange={e => setPay(p => ({ ...p, method: e.target.value }))}>
+                {PAYMENT_METHODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select></div>
+            <div className="acc-form-group"><label>Reference</label>
+              <input type="text" placeholder="Txn / cheque no." value={pay.reference} onChange={e => setPay(p => ({ ...p, reference: e.target.value }))} /></div>
+          </div>
+          <div className="inv-confirm-btns">
+            <button className="inv-btn" onClick={() => setShowPay(false)} disabled={busy}>Cancel</button>
+            <button className="inv-btn inv-btn-primary" onClick={recordPayment} disabled={busy}>{busy ? 'Saving…' : 'Save payment'}</button>
+          </div>
+        </div>
+      )}
+
+      <div className="inv-meta-grid">
+        {[
+          ['Invoice number', inv.invoice_number || 'Draft'], ['Invoice date', fmtDate(inv.invoice_date)], ['Due date', fmtDate(inv.due_date)],
+          ['Term of payment', inv.payment_terms || '—'], ['Delivery note no', inv.delivery_note_no || '—'], ['Delivery date', fmtDate(inv.delivery_date)],
+          ["Customer's PO ref", inv.your_ref || '—'], ['Vendor number for Al Sinan', inv.vendor_number || '—'], ['Internal reference no.', inv.internal_reference || '—'],
+          ['GR/SES', inv.gr_ses || '—'],
+          ['Invoice currency', cur === 'SAR' ? 'SAR' : `${cur} (1 ${cur} = ${inv.exchange_rate} SAR)`], ['Sales order', inv.sales_order_number || '—'],
+          ['Buyer VAT number', inv.customer_tax_id || '—'], ['Buyer CR no.', inv.customer_cr_no || '—'],
+          ['Buyer address', [inv.customer_building_no, inv.customer_street, inv.customer_district, inv.customer_city, inv.customer_country, inv.customer_postal_code].filter(Boolean).join(', ') || '—'],
+          ['Created by', inv.created_by_name ? `${inv.created_by_name}${inv.created_by_email ? ` (${inv.created_by_email})` : ''}` : '—'],
+          ['Created', fmtDateTime(inv.created_at)],
+        ].map(([k, v]) => <div key={k}><span>{k}</span><strong>{v}</strong></div>)}
+      </div>
+
+      <div className="inv-section-title">Line items</div>
+      <div className="inv-lines-wrap">
+        <table className="inv-lines inv-lines-ro">
+          <thead>
+            <tr><th>#</th><th>Material no.</th><th>Item description</th><th style={{ textAlign: 'right' }}>Unit price</th>
+              <th style={{ textAlign: 'right' }}>Qty</th><th>UOM</th><th style={{ textAlign: 'right' }}>Taxable amount</th>
+              <th style={{ textAlign: 'center' }}>Tax rate</th><th style={{ textAlign: 'right' }}>Tax amount</th>
+              <th style={{ textAlign: 'right' }}>Item subtotal (incl. VAT)</th></tr>
+          </thead>
+          <tbody>
+            {inv.items.map(i => (
+              <tr key={i.id}>
+                <td className="inv-lines-no">{i.line_no}</td>
+                <td>{i.catalog_no || '—'}</td>
+                <td>
+                  <strong>{i.item_name}</strong>
+                  {i.description && <div className="inv-line-desc">{i.description}</div>}
+                </td>
+                <td style={{ textAlign: 'right' }}>{fmtNum(i.unit_price)}</td>
+                <td style={{ textAlign: 'right' }}>{fmtNum(i.qty)}</td><td>{i.unit}</td>
+                <td style={{ textAlign: 'right' }}>{fmtNum(i.total)}</td>
+                <td style={{ textAlign: 'center' }}>VAT {inv.vat_rate}%</td>
+                <td style={{ textAlign: 'right' }}>{fmtNum(i.tax_amount)}</td>
+                <td style={{ textAlign: 'right' }}><strong>{fmtNum(i.subtotal_incl_vat)}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="inv-totals-box inv-totals-right">
+        <div><span>Total (excluding VAT)</span><strong>{fmtNum(inv.subtotal)} {cur}</strong></div>
+        <div><span>Discount</span><strong>{fmtNum(inv.discount)} {cur}</strong></div>
+        <div><span>Total taxable amount</span><strong>{fmtNum(inv.taxable_amount)} {cur}</strong></div>
+        <div><span>Total VAT {inv.vat_rate}%</span><strong>{fmtNum(inv.vat)} {cur}</strong></div>
+        {cur !== 'SAR' && <div><span>Total VAT {inv.vat_rate}% in SAR</span><strong>{fmtNum(inv.vat_sar)} SAR</strong></div>}
+        <div className="inv-totals-grand"><span>Total amount due</span><strong>{fmtNum(inv.total)} {cur}</strong></div>
+        {cur !== 'SAR' && <div><span>Total amount due in SAR</span><strong>{fmtNum(inv.total_sar)} SAR</strong></div>}
+        {inv.amount_paid > 0 && <>
+          <div><span>Paid</span><strong>− {fmtNum(inv.amount_paid)} {cur}</strong></div>
+          <div className="inv-totals-balance"><span>Balance due</span><strong>{fmtNum(inv.balance)} {cur}</strong></div>
+        </>}
+      </div>
+
+      {inv.remarks && (
+        <div className="inv-notes"><div><span>Notes</span><p>{inv.remarks}</p></div></div>
+      )}
+
+      {inv.payments.length > 0 && <>
+        <div className="inv-section-title">Payments</div>
+        <table className="inv-lines inv-lines-ro">
+          <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th style={{ textAlign: 'right' }}>Amount</th>{canWrite && <th style={{ width: 80 }}></th>}</tr></thead>
+          <tbody>
+            {inv.payments.map(p => (
+              <tr key={p.id}>
+                <td>{fmtDate(p.payment_date)}</td>
+                <td>{(PAYMENT_METHODS.find(([v]) => v === p.method) || [0, p.method])[1]}</td>
+                <td>{p.reference || '—'}</td>
+                <td style={{ textAlign: 'right' }}><strong>{fmtMoney(p.amount, cur)}</strong></td>
+                {canWrite && <td style={{ textAlign: 'right' }}>
+                  <button className="inv-link-danger" disabled={busy} onClick={() => voidPayment(p.id)}>Remove</button>
+                </td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>}
+
+      <div className="inv-section-title">Activity</div>
+      <ActivityTimeline key={`${inv.id}-${inv.status}-${inv.payments.length}`} entityType="sales_invoice" entityId={inv.id} />
+    </Modal>
   );
 }
 
 
 /* ═══════════════════════════ MAIN COMPONENT ═══════════════════════════ */
 
-const STATUS_BADGE_CLS = { Draft: 'ib-draft', Sent: 'ib-sent', Paid: 'ib-paid', Overdue: 'ib-over' };
+const FILTERS = [
+  { key: 'All',       color: '#4b5563', badge: 'cnt-gray', icon: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></> },
+  { key: 'Draft',     color: '#a16207', badge: 'cnt-gray', icon: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></> },
+  { key: 'Open',      color: '#1d4ed8', badge: 'cnt-blue', icon: <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></> },
+  { key: 'Overdue',   color: '#dc2626', badge: 'cnt-red',  icon: <><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></> },
+  { key: 'Paid',      color: '#16a34a', badge: 'cnt-gray', icon: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></> },
+  { key: 'Cancelled', color: '#6b7280', badge: 'cnt-gray', icon: <><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></> },
+];
 
 /**
- * Invoicing page — reads from and writes to Odoo via the Kytos backend proxy.
+ * Invoicing page — Kytos' in-house customer invoicing.
  *
  * @param {object}   props
  * @param {Function} props.goPage - Navigate to another page by key.
  */
 export default function Invoicing({ goPage }) {
-  const [invoices,      setInvoices]      = useState([]);
-  const [kpis,          setKpis]          = useState(null);
-  const [counts,        setCounts]        = useState({ Draft: 0, Sent: 0, Paid: 0, Overdue: 0 });
-  const [partners,      setPartners]      = useState([]);
-  const [currentUser,   setCurrentUser]   = useState(null);
-  const [filter,        setFilter]        = useState('Sent');
-  const [modal,         setModal]         = useState(null);   // 'new'
-  const [confirmInv,    setConfirmInv]    = useState(null);
-  const [showReminders, setShowReminders] = useState(false);
-  const [showAnalysis,  setShowAnalysis]  = useState(false);
-  const [toast,         setToast]         = useState(null);
-  const [searchQ,       setSearchQ]       = useState('');
-  const [loading,       setLoading]       = useState(true);
+  const [invoices,    setInvoices]    = useState([]);
+  const [kpis,        setKpis]        = useState(null);
+  const [counts,      setCounts]      = useState({});
+  const [orders,      setOrders]      = useState([]);
+  const [seller,      setSeller]      = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [filter,      setFilter]      = useState('All');
+  const [searchQ,     setSearchQ]     = useState('');
+  const [loading,     setLoading]     = useState(true);
+  const [loadError,   setLoadError]   = useState('');
+  const [form,        setForm]        = useState(null);     // null | { invoice? }
+  const [detailId,    setDetailId]    = useState(null);
+  const [toast,       setToast]       = useState(null);
 
-  function showToast(msg) { setToast(msg); }
+  const showToast = msg => setToast(msg);
 
   /* --- Data loading --- */
 
   const loadInvoices = useCallback(async (statusFilter) => {
-    setLoading(true);
+    setLoading(true); setLoadError('');
     try {
-      const params = statusFilter ? `?status=${statusFilter}` : '';
-      const res = await fetch(`${API_BASE}/api/v1/odoo/invoices${params}`, { headers: authHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setInvoices(data.items || []);
-        setCounts(data.counts || {});
-      }
+      const qs = new URLSearchParams({ limit: '500' });
+      if (statusFilter && statusFilter !== 'All') qs.set('status', statusFilter);
+      const data = await api(`${INV_API}?${qs}`);
+      setInvoices(data.items || []);
+      setCounts(data.counts || {});
+    } catch (e) {
+      setLoadError(e.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const loadAll = useCallback(async () => {
-    const [kpiRes, userRes, partnerRes] = await Promise.all([
-      fetch(`${API_BASE}/api/v1/odoo/invoices/kpis`, { headers: authHeaders() }),
-      fetch(`${API_BASE}/api/v1/auth/me`,             { headers: authHeaders() }),
-      fetch(`${API_BASE}/api/v1/odoo/partners`,       { headers: authHeaders() }),
-    ]);
-    if (kpiRes.ok)     setKpis(await kpiRes.json());
-    if (userRes.ok)    setCurrentUser(await userRes.json());
-    if (partnerRes.ok) setPartners(await partnerRes.json());
-    await loadInvoices(filter);
-  }, [filter, loadInvoices]);
+  const loadKpis = useCallback(async () => {
+    try { setKpis(await api(`${INV_API}/kpis`)); } catch { /* KPI strip is optional */ }
+  }, []);
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    loadKpis();
+    api(`${API_BASE}/api/v1/auth/me`).then(setCurrentUser).catch(() => {});
+    api(`${API_BASE}/api/v1/sales/orders`).then(d => setOrders(d.items || [])).catch(() => {});
+    api(`${INV_API}/company`).then(setSeller).catch(() => {});
+  }, [loadKpis]);
 
-  useEffect(() => { loadInvoices(filter); }, [filter]);
+  useEffect(() => { loadInvoices(filter); }, [filter, loadInvoices]);
 
-  /* --- Actions --- */
-
-  function onInvoiceCreated(inv) {
-    showToast(`Invoice created in Odoo — ${inv.num}`);
-    loadAll();
-  }
-
-  function onInvoiceConfirmed(inv) {
-    showToast(`${inv.num} confirmed in Odoo`);
-    loadAll();
-  }
+  const refresh = useCallback(() => { loadInvoices(filter); loadKpis(); }, [filter, loadInvoices, loadKpis]);
 
   /* --- Derived --- */
 
-  const userInitials = currentUser
-    ? currentUser.full_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-    : 'SJ';
-  const userName = currentUser?.full_name || 'Loading…';
-  const userRole = currentUser?.role || '';
+  const canWrite = WRITE_ROLES.includes(String(currentUser?.role || '').toLowerCase());
+  const userInitials = currentUser ? currentUser.full_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '';
+  const totalCount = ['Draft', 'Open', 'Overdue', 'Paid', 'Cancelled'].reduce((s, k) => s + (counts[k] || 0), 0);
 
-  const displayed = invoices.filter(inv =>
-    searchQ === '' ||
-    inv.company.toLowerCase().includes(searchQ.toLowerCase()) ||
-    inv.num.toLowerCase().includes(searchQ.toLowerCase())
+  const customerNames = useMemo(
+    () => [...new Set([...orders.map(o => o.customer_name), ...invoices.map(i => i.customer_name)].filter(Boolean))].sort(),
+    [orders, invoices],
   );
+
+  const displayed = invoices.filter(inv => {
+    const q = searchQ.trim().toLowerCase();
+    return !q || inv.customer_name.toLowerCase().includes(q) || (inv.invoice_number || '').toLowerCase().includes(q);
+  });
+
+  function exportCsv() {
+    if (!displayed.length) { showToast('No invoices to export.'); return; }
+    const rows = [
+      ['Invoice No.', 'Customer', 'Currency', 'Total', 'Paid', 'Balance', 'Invoice Date', 'Due Date', 'Status'],
+      ...displayed.map(i => [i.invoice_number || 'Draft', i.customer_name, i.currency, i.total, i.amount_paid, i.balance, i.invoice_date || '', i.due_date || '', i.display_status]),
+    ];
+    const csv  = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url  = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `invoices-${filter.toLowerCase()}-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${displayed.length} invoice(s) to CSV`);
+  }
+
+  function onFormSaved(saved, wasEdit) {
+    showToast(wasEdit ? 'Draft updated' : 'Draft invoice created');
+    refresh();
+    setDetailId(saved.id);
+  }
 
   /* --- Render --- */
 
   return (
     <div id="invoicing-page">
       {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
-      {modal === 'new' && <NewInvoiceModal partners={partners} onClose={() => setModal(null)} onSaved={onInvoiceCreated} />}
-      {confirmInv && <ConfirmInvoiceModal inv={confirmInv} onClose={() => setConfirmInv(null)} onDone={onInvoiceConfirmed} />}
+      {form && (
+        <InvoiceFormModal invoice={form.invoice} orders={orders} customerNames={customerNames} seller={seller}
+          onClose={() => setForm(null)} onSaved={onFormSaved} />
+      )}
+      {detailId && !form && (
+        <InvoiceDetailModal key={detailId} invoiceId={detailId} canWrite={canWrite} showToast={showToast}
+          onClose={() => setDetailId(null)} onChanged={refresh}
+          onEdit={inv => setForm({ invoice: inv })} />
+      )}
 
       <Sidebar activePage="invoicing" goPage={goPage} />
 
@@ -353,219 +825,130 @@ export default function Invoicing({ goPage }) {
         <div className="tb">
           <div className="tb-title tb-title-block">
             <div>Invoicing</div>
-            <div className="tb-subtitle">Powered by Odoo — invoices are created and confirmed directly in your Odoo account</div>
+            <div className="tb-subtitle">Create customer invoices, confirm them to get an invoice number, and record payments as they arrive</div>
           </div>
           <div className="tb-right">
             <div className="tb-bell"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
             <div className="tb-user">
-              <div className="tb-avatar" style={{background:'linear-gradient(135deg,#16a34a,#10b981)'}}>{userInitials}</div>
-              <div><div className="tb-uname">{userName}</div><div className="tb-urole">{userRole}</div></div>
+              <div className="tb-avatar" style={{ background: 'linear-gradient(135deg,#16a34a,#10b981)' }}>{userInitials || '…'}</div>
+              <div><div className="tb-uname">{currentUser?.full_name || 'Loading…'}</div><div className="tb-urole">{currentUser?.role || ''}</div></div>
             </div>
           </div>
         </div>
 
         <div className="pg">
           <div className="pg-header">
-            <div className="pg-header-left"></div>
+            <div className="pg-header-left">
+              {currentUser && !canWrite && (
+                <div className="inv-viewonly">
+                  View-only: the <strong>{currentUser.role}</strong> role can't create or change invoices. Log in as an admin, manager or finance user to do that.
+                </div>
+              )}
+            </div>
             <div className="pg-header-actions">
-              <button className="btn-action btn-blue" onClick={() => setModal('new')}>
-                <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New Invoice
-              </button>
-              <button className="btn-action btn-purple" onClick={() => {
-                if (!displayed.length) { showToast('No invoices to export.'); return; }
-                const rows = [
-                  ['Invoice No.', 'Client', 'Amount', 'Dates', 'Status'],
-                  ...displayed.map(inv => [
-                    inv.num,
-                    inv.company,
-                    inv.amount,
-                    inv.dates,
-                    inv.status,
-                  ]),
-                ];
-                const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-                const blob = new Blob([csv], { type: 'text/csv' });
-                const url  = URL.createObjectURL(blob);
-                const a    = document.createElement('a');
-                a.href     = url;
-                a.download = `invoices-${filter.toLowerCase()}-${new Date().toISOString().slice(0,10)}.csv`;
-                a.click();
-                URL.revokeObjectURL(url);
-                showToast(`Exported ${displayed.length} invoice(s) to CSV`);
-              }}>
+              {canWrite && (
+                <button className="btn-action btn-blue" onClick={() => setForm({})}>
+                  <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New Invoice
+                </button>
+              )}
+              <button className="btn-action btn-purple" onClick={exportCsv}>
                 <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export
               </button>
             </div>
           </div>
 
-          {/* Odoo KPI banner */}
+          {/* KPI strip */}
           {kpis && (
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'14px',marginBottom:'20px'}}>
-              {[
-                { label:'Total Invoiced',   value: fmtCurrency(kpis.total_invoiced),   color:'#2563eb' },
-                { label:'Received',         value: fmtCurrency(kpis.total_received),   color:'#16a34a' },
-                { label:'Outstanding',      value: fmtCurrency(kpis.total_outstanding), color:'#7c3aed' },
-                { label:'Overdue Invoices', value: kpis.overdue_count,                color:'#dc2626' },
-              ].map(k => (
-                <div key={k.label} className="kpi" style={{cursor:'default'}}>
-                  <div className="kpi-label">{k.label}</div>
-                  <div className="kpi-body">
-                    <div className="kpi-value" style={{color:k.color,fontSize:'22px'}}>{k.value}</div>
+            <>
+              <div className="inv-kpis">
+                {[
+                  { label: 'Total Invoiced',   value: fmtMoney(kpis.total_invoiced, kpis.currency),    color: '#2563eb' },
+                  { label: 'Received',         value: fmtMoney(kpis.total_received, kpis.currency),    color: '#16a34a' },
+                  { label: 'Outstanding',      value: fmtMoney(kpis.total_outstanding, kpis.currency), color: '#7c3aed' },
+                  { label: 'Overdue Invoices', value: kpis.overdue_count,                              color: '#dc2626' },
+                ].map(k => (
+                  <div key={k.label} className="kpi" style={{ cursor: 'default' }}>
+                    <div className="kpi-label">{k.label}</div>
+                    <div className="kpi-body"><div className="kpi-value" style={{ color: k.color, fontSize: '22px' }}>{k.value}</div></div>
                   </div>
-                  <div style={{fontSize:'11px',color:'#9ca3af',marginTop:'4px',display:'flex',alignItems:'center',gap:'4px'}}>
-                    <span style={{background:'#714B67',color:'#fff',padding:'1px 5px',borderRadius:'3px',fontSize:'9px',fontWeight:700}}>ODOO</span> live data
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              {kpis.other_currency_invoices > 0 && (
+                <div className="inv-kpi-note">Totals above cover {kpis.currency} invoices only — {kpis.other_currency_invoices} invoice(s) in other currencies are not included.</div>
+              )}
+            </>
           )}
 
           <div className="inv-layout">
-            {/* Left sidebar */}
+            {/* Left: status filter */}
             <div className="inv-left">
               <div className="inv-panel">
                 <div className="inv-panel-title">Invoice Status</div>
-                {['Draft','Sent','Paid','Overdue'].map((s, i) => {
-                  const icons = [
-                    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
-                    <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>,
-                    <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
-                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
-                  ];
-                  const clrs   = ['#1d4ed8','#16a34a','#6b7280','#dc2626'];
-                  const badges = ['cnt-blue','cnt-gray','cnt-gray','cnt-red'];
-                  return (
-                    <div key={s} className={`inv-status-item${filter===s?' active':''}`} style={{cursor:'pointer'}} onClick={() => setFilter(s)}>
-                      <span className="inv-status-icon" style={{color:clrs[i]}}>{icons[i]}</span>
-                      <span className="inv-status-name">{s}</span>
-                      <span className={`inv-count-badge ${badges[i]}`}>{counts[s] ?? 0}</span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="inv-panel">
-                <div className="inv-panel-title">Connected Systems</div>
-                <div className="prov-item">
-                  <div className="prov-logo" style={{background:'#714B67',color:'#fff',fontSize:'11px',fontWeight:700}}>OD</div>
-                  <div className="prov-info"><div className="prov-name">Odoo</div><div className="prov-status">Connected — kytos1</div></div>
-                  <div className="prov-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
-                </div>
-                <div className="prov-item">
-                  <div className="prov-logo prov-stripe">S</div>
-                  <div className="prov-info"><div className="prov-name">Stripe</div><div className="prov-status">Not connected</div></div>
-                  <button className="btn-connect" onClick={() => showToast('Configure in Odoo → Payment Providers')}>Connect</button>
-                </div>
-                <div className="prov-item">
-                  <div className="prov-logo prov-bank"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
-                  <div className="prov-info"><div className="prov-name">Bank Transfer</div><div className="prov-status">Configure in Odoo</div></div>
-                  <button className="btn-connect" onClick={() => showToast('Configure bank accounts in Odoo')}>Setup</button>
-                </div>
+                {FILTERS.map(f => (
+                  <div key={f.key} className={`inv-status-item${filter === f.key ? ' active' : ''}`} style={{ cursor: 'pointer' }} onClick={() => setFilter(f.key)}>
+                    <span className="inv-status-icon" style={{ color: f.color }}><svg viewBox="0 0 24 24">{f.icon}</svg></span>
+                    <span className="inv-status-name">{f.key}</span>
+                    <span className={`inv-count-badge ${f.badge}`}>{f.key === 'All' ? totalCount : (counts[f.key] ?? 0)}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* Center */}
+            {/* Center: list */}
             <div className="inv-center">
               <div className="inv-search-bar">
-                <input className="inv-search" placeholder="Search invoices…" type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
-                <button className="inv-filter-btn" onClick={() => showToast('Filters applied')}>
-                  <svg viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>Filter
-                </button>
+                <input className="inv-search" placeholder="Search by customer or invoice number…" type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
               </div>
 
               <div className="inv-list">
                 {loading ? (
-                  <div style={{padding:'32px',textAlign:'center',color:'#9ca3af',fontSize:'13px'}}>Loading from Odoo…</div>
+                  <div className="inv-empty">Loading invoices…</div>
+                ) : loadError ? (
+                  <div className="inv-empty" style={{ color: '#dc2626' }}>{loadError}</div>
                 ) : displayed.length === 0 ? (
-                  <div style={{padding:'28px 20px',textAlign:'center',color:'#9ca3af',fontSize:'13.5px'}}>
-                    No {filter.toLowerCase()} invoices{searchQ ? ` matching "${searchQ}"` : ''} in Odoo.
+                  <div className="inv-empty">
+                    {searchQ ? `No invoices match "${searchQ}".` : filter === 'All' ? 'No invoices yet.' : `No ${filter.toLowerCase()} invoices.`}
+                    {canWrite && filter === 'All' && !searchQ && <div style={{ marginTop: 10 }}><button className="inv-btn inv-btn-primary" onClick={() => setForm({})}>Create your first invoice</button></div>}
                   </div>
                 ) : displayed.map(inv => (
-                  <div key={inv.id} className="inv-card">
+                  <div key={inv.id} className="inv-card" onClick={() => setDetailId(inv.id)}>
                     <div className="inv-card-left">
                       <div className="inv-card-num">
-                        <span className="inv-num">{inv.num}</span>
-                        <span className={`inv-badge ${STATUS_BADGE_CLS[inv.status] || 'ib-draft'}`}>{inv.status}</span>
-                        <span style={{background:'#714B67',color:'#fff',fontSize:'9px',fontWeight:700,padding:'1px 5px',borderRadius:'3px',marginLeft:'4px'}}>ODOO</span>
+                        <span className="inv-num">{inv.invoice_number || 'Draft'}</span>
+                        <StatusBadge status={inv.display_status} />
                       </div>
-                      <div className="inv-company">{inv.company}</div>
-                      <div className="inv-dates">{inv.dates}</div>
+                      <div className="inv-company">{inv.customer_name}{inv.your_ref ? <span className="inv-subject"> · PO {inv.your_ref}</span> : null}</div>
+                      <div className="inv-dates">Invoiced: {fmtDate(inv.invoice_date)} • Due: {fmtDate(inv.due_date)}</div>
                     </div>
                     <div className="inv-card-right">
-                      <div className="inv-amount">{inv.amount}</div>
-                      <div style={{display:'flex',gap:'6px',marginTop:'6px',flexWrap:'wrap',justifyContent:'flex-end'}}>
-                        {inv.status === 'Draft' && (
-                          <button className="inv-edit" style={{background:'#2563eb',color:'#fff',border:'none'}}
-                            onClick={e => { e.stopPropagation(); setConfirmInv(inv); }}>
-                            Confirm
-                          </button>
-                        )}
-                        {inv.status !== 'Draft' && (
-                          <button
-                            onClick={async e => {
-                              e.stopPropagation();
-                              showToast('Generating PDF from Odoo…');
-                              try {
-                                const res = await fetch(`${API_BASE}/api/v1/odoo/invoices/${inv.id}/pdf`, { headers: authHeaders() });
-                                if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
-                                const blob = await res.blob();
-                                const url  = URL.createObjectURL(blob);
-                                const a    = document.createElement('a');
-                                a.href     = url;
-                                a.download = `${inv.num.replace(/\//g,'-')}.pdf`;
-                                a.click();
-                                URL.revokeObjectURL(url);
-                                showToast(`Downloaded ${inv.num}`);
-                              } catch(err) {
-                                showToast(`PDF error: ${err.message}`);
-                              }
-                            }}
-                            style={{display:'flex',alignItems:'center',gap:'4px',padding:'4px 10px',background:'#f5f3ff',color:'#7c3aed',border:'1px solid #ddd6fe',borderRadius:'6px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                            PDF
-                          </button>
-                        )}
-                      </div>
+                      <div className="inv-amount">{fmtMoney(inv.total, inv.currency)}</div>
+                      {inv.amount_paid > 0 && inv.display_status !== 'Paid' && (
+                        <div className="inv-partial">Paid {fmtMoney(inv.amount_paid, inv.currency)} · Due {fmtMoney(inv.balance, inv.currency)}</div>
+                      )}
+                      <button className="inv-pdf-btn" onClick={async e => {
+                        e.stopPropagation();
+                        try { await downloadPdf(inv); showToast(`Downloaded ${inv.invoice_number || 'draft'}`); }
+                        catch (err) { showToast(`PDF error: ${err.message}`); }
+                      }}>PDF</button>
                     </div>
                   </div>
                 ))}
               </div>
-
-              {/* AI Insights */}
-              <div className="ai-card">
-                <div className="ai-card-head">
-                  <div className="ai-icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-                  <span className="ai-title">AI Intelligence Insights</span>
-                </div>
-                <div className="ai-insight"><div className="ai-dot ai-dot-yellow"></div><div className="ai-text"><strong>Payment Prediction:</strong> Invoices due within 30 days have a 92% on-time payment rate based on historical patterns.</div></div>
-                <div className="ai-insight"><div className="ai-dot ai-dot-green"></div><div className="ai-text"><strong>Odoo Sync:</strong> All invoices are written directly to Odoo in real time — no manual export needed.</div></div>
-                <div className="ai-insight"><div className="ai-dot ai-dot-orange"></div><div className="ai-text"><strong>Tip:</strong> Confirm draft invoices to assign sequential Odoo numbers (e.g. INV/2026/00001) and make them billable.</div></div>
-                {showAnalysis && (
-                  <div className="ai-analysis-expand">
-                    <div className="ai-analysis-row"><span>Total invoiced (Odoo)</span><strong>{kpis ? fmtCurrency(kpis.total_invoiced) : '—'}</strong></div>
-                    <div className="ai-analysis-row"><span>Received</span><strong style={{color:'#16a34a'}}>{kpis ? fmtCurrency(kpis.total_received) : '—'}</strong></div>
-                    <div className="ai-analysis-row"><span>Outstanding</span><strong style={{color:'#7c3aed'}}>{kpis ? fmtCurrency(kpis.total_outstanding) : '—'}</strong></div>
-                    <div className="ai-analysis-row"><span>Overdue count</span><strong style={{color:'#ef4444'}}>{kpis?.overdue_count ?? '—'}</strong></div>
-                  </div>
-                )}
-                <button className="ai-link" onClick={() => setShowAnalysis(p => !p)}>
-                  {showAnalysis ? 'Hide Analysis' : 'View Full Analysis'}
-                  <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                </button>
-              </div>
             </div>
 
-            {/* Right */}
+            {/* Right: overdue + quick stats */}
             <div className="inv-right">
-              <div className="inv-panel" style={{position:'relative'}}>
-                <div className="inv-panel-title">Dunning Reminders</div>
-                <div className="dun-item"><div className="dun-head"><span className="dun-title">Payment Reminder</span><span className="dun-urgent dun-orange">Configure in Odoo</span></div><div className="dun-sub">Set up automated reminders</div><div className="dun-co">via Odoo → Accounting → Follow-up</div></div>
-                <div className="dun-item"><div className="dun-head"><span className="dun-title">Overdue Tracking</span><span className="dun-urgent dun-red">{kpis?.overdue_count ?? 0} overdue</span></div><div className="dun-sub">Tracked live from Odoo</div><div className="dun-co">Switch to Overdue filter to see them</div></div>
-                <button className="btn-configure" onClick={() => setShowReminders(p => !p)}>
-                  {showReminders ? 'Close Settings' : 'Configure Reminders'}
-                </button>
-                {showReminders && <RemindersPanel onClose={() => setShowReminders(false)} />}
+              <div className="inv-panel">
+                <div className="inv-panel-title">Overdue Tracking</div>
+                {kpis ? (
+                  <>
+                    <div className="dun-item">
+                      <div className="dun-head"><span className="dun-title">Overdue invoices</span><span className="dun-urgent dun-red">{kpis.overdue_count}</span></div>
+                      <div className="dun-sub">{fmtMoney(kpis.overdue_amount, kpis.currency)} past due</div>
+                    </div>
+                    <button className="btn-configure" onClick={() => setFilter('Overdue')}>View overdue invoices</button>
+                  </>
+                ) : <div className="inv-hint">Loading…</div>}
               </div>
 
               <div className="inv-panel">
@@ -573,13 +956,13 @@ export default function Invoicing({ goPage }) {
                 {kpis && kpis.total_invoiced > 0 ? (
                   <>
                     <div className="qs-row"><span className="qs-label">Collection Rate</span><span className="qs-val">{Math.round(kpis.total_received / kpis.total_invoiced * 100)}%</span></div>
-                    <div className="qs-bar-wrap"><div className="qs-bar" style={{width:`${Math.round(kpis.total_received / kpis.total_invoiced * 100)}%`,background:'#16a34a'}}></div></div>
+                    <div className="qs-bar-wrap"><div className="qs-bar" style={{ width: `${Math.round(kpis.total_received / kpis.total_invoiced * 100)}%`, background: '#16a34a' }}></div></div>
                   </>
                 ) : (
-                  <div style={{fontSize:'13px',color:'#9ca3af',marginBottom:'12px'}}>No posted invoices yet</div>
+                  <div className="inv-hint" style={{ marginBottom: 12 }}>No confirmed invoices yet</div>
                 )}
-                <div className="qs-outstanding-label">Outstanding (Odoo)</div>
-                <div className="qs-outstanding-val">{kpis ? fmtCurrency(kpis.total_outstanding) : '—'}</div>
+                <div className="qs-outstanding-label">Outstanding</div>
+                <div className="qs-outstanding-val">{kpis ? fmtMoney(kpis.total_outstanding, kpis.currency) : '—'}</div>
               </div>
             </div>
           </div>
