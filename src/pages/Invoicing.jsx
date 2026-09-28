@@ -36,6 +36,11 @@ const PAYMENT_METHODS = [
   ['bank_transfer', 'Bank transfer'], ['cash', 'Cash'], ['cheque', 'Cheque'], ['card', 'Card'], ['other', 'Other'],
 ];
 
+/** Human label for a stored payment method value, falling back to the raw value if unrecognised. */
+function methodLabel(method) {
+  return (PAYMENT_METHODS.find(([v]) => v === method) || [method, method])[1];
+}
+
 /* === Helpers === */
 
 function authHeaders() {
@@ -66,12 +71,18 @@ function fmtMoney(n, currency = 'SAR') {
   return `${sym}${v}`;
 }
 
+/** Format a date-only value (e.g. "2026-09-28", no time/zone). Appending a
+ * local midnight time avoids the classic bug where `new Date("2026-09-28")`
+ * parses as UTC midnight and then displays as the *previous* day in any
+ * timezone behind UTC. */
 function fmtDate(iso) {
   if (!iso) return '—';
   const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** Format a full timestamp (e.g. "2026-09-28T04:54:43Z") — already carries a
+ * timezone, so unlike fmtDate() it needs no local-midnight correction. */
 function fmtDateTime(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -83,6 +94,7 @@ function fmtNum(n) {
   return parseFloat(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** Fetch the invoice PDF and trigger a browser download (no navigation/new tab). */
 async function downloadPdf(inv) {
   const res = await fetch(`${INV_API}/${inv.id}/pdf`, { headers: authHeaders() });
   if (!res.ok) throw new Error(errMessage(await res.json().catch(() => ({})), 'Could not generate PDF'));
@@ -695,7 +707,7 @@ function InvoiceDetailModal({ invoiceId, canWrite, onClose, onChanged, onEdit, s
             {inv.payments.map(p => (
               <tr key={p.id}>
                 <td>{fmtDate(p.payment_date)}</td>
-                <td>{(PAYMENT_METHODS.find(([v]) => v === p.method) || [0, p.method])[1]}</td>
+                <td>{methodLabel(p.method)}</td>
                 <td>{p.reference || '—'}</td>
                 <td style={{ textAlign: 'right' }}><strong>{fmtMoney(p.amount, cur)}</strong></td>
                 {canWrite && <td style={{ textAlign: 'right' }}>
