@@ -26,6 +26,7 @@ const ACTION_ICON = {
   cancelled:        '⊘',
   payment_recorded: '＋',
   payment_removed:  '−',
+  emailed:          '✉',
 };
 
 function timeAgo(iso) {

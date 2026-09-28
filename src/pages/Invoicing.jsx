@@ -180,6 +180,8 @@ function InvoiceFormModal({ invoice, orders, customerNames, seller, onClose, onS
     customer_postal_code: invoice?.customer_postal_code ?? '',
     customer_tax_id:      invoice?.customer_tax_id      ?? '',
     customer_cr_no:       invoice?.customer_cr_no       ?? '',
+    contact_person:       invoice?.contact_person       ?? '',
+    email:                invoice?.email                ?? '',
     vat_rate:             String(invoice?.vat_rate ?? 15),
     remarks:              invoice?.remarks              ?? '',
     sales_order_id:       invoice?.sales_order_id       ?? null,
@@ -349,6 +351,12 @@ function InvoiceFormModal({ invoice, orders, customerNames, seller, onClose, onS
               ['customer_country', 4], ['customer_postal_code', 5], ['customer_tax_id', 6], ['customer_cr_no', 7]].map(([k, i]) => (
               <BiField key={k} en={ADDRESS_LABELS[i][0]} ar={ADDRESS_LABELS[i][1]}><input type="text" {...bind(k)} /></BiField>
             ))}
+            <BiField en="Contact person" hint="Internal only — not printed on the invoice">
+              <input type="text" {...bind('contact_person')} />
+            </BiField>
+            <BiField en="Email" hint="Internal only — used for the &quot;Email invoice&quot; button">
+              <input type="email" placeholder="billing@customer.com" {...bind('email')} />
+            </BiField>
           </div>
         </div>
       </div>
@@ -515,6 +523,7 @@ function InvoiceDetailModal({ invoiceId, canWrite, onClose, onChanged, onEdit, s
     showToast('Generating PDF…');
     try { await downloadPdf(inv); } catch (e) { setError(e.message); }
   }
+  const emailInvoice = () => run(() => api(`${INV_API}/${inv.id}/email`, { method: 'POST' }), u => `Invoice emailed to ${u.email}`);
 
   if (!inv) {
     return (
@@ -556,6 +565,11 @@ function InvoiceDetailModal({ invoiceId, canWrite, onClose, onChanged, onEdit, s
             <button className="inv-btn inv-btn-primary" disabled={busy} onClick={() => { setShowPay(s => !s); setPay(p => ({ ...p, amount: String(inv.balance) })); }}>Record payment</button>
             {inv.payments.length === 0 && <button className="inv-btn inv-btn-danger" disabled={busy} onClick={() => setConfirming('cancel')}>Cancel invoice</button>}
           </>}
+          {(isPosted || isPaid) && (
+            <button className="inv-btn" disabled={busy} onClick={emailInvoice} title={inv.email || 'No customer email set — edit the invoice to add one'}>
+              Email invoice{inv.email ? ` to ${inv.email}` : ''}
+            </button>
+          )}
           <button className="inv-btn" onClick={pdf}>Download PDF</button>
         </div>
       )}
@@ -619,6 +633,7 @@ function InvoiceDetailModal({ invoiceId, canWrite, onClose, onChanged, onEdit, s
           ['GR/SES', inv.gr_ses || '—'],
           ['Invoice currency', cur === 'SAR' ? 'SAR' : `${cur} (1 ${cur} = ${inv.exchange_rate} SAR)`], ['Sales order', inv.sales_order_number || '—'],
           ['Buyer VAT number', inv.customer_tax_id || '—'], ['Buyer CR no.', inv.customer_cr_no || '—'],
+          ['Contact person', inv.contact_person || '—'], ['Email', inv.email || '—'],
           ['Buyer address', [inv.customer_building_no, inv.customer_street, inv.customer_district, inv.customer_city, inv.customer_country, inv.customer_postal_code].filter(Boolean).join(', ') || '—'],
           ['Created by', inv.created_by_name ? `${inv.created_by_name}${inv.created_by_email ? ` (${inv.created_by_email})` : ''}` : '—'],
           ['Created', fmtDateTime(inv.created_at)],
