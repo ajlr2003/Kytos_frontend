@@ -1,23 +1,25 @@
 /**
  * src/pages/Contracts.jsx
  *
- * Contract / PO payment-milestone tracker. Mirrors the internal tool the
- * user's team already runs day-to-day: each Purchase Order is tracked as a
- * contract broken into billing milestones (Advance, DEP, FAT, Delivery, …),
+ * Contract / PO payment-milestone tracker. Each Purchase Order is tracked as
+ * a contract broken into billing milestones (Advance, DEP, FAT, Delivery, …),
  * each with its own %, amount, due date, and invoicing/receipt status.
  *
- * This module has no backend counterpart yet (no Contract/Milestone models
- * or endpoints exist on the API) — all data is local-only, persisted to
- * localStorage under `kytos_contracts`, and every action bar/tooltip that
- * touches it says so explicitly rather than pretending to sync.
+ * Backed by /api/v1/contracts (see backend app/routers/contracts.py) — a
+ * contract and its milestones are saved to the shared database like every
+ * other module; nothing here is local-only or browser-specific anymore.
+ * The UI keeps its original camelCase field names internally (fileRef,
+ * poNumber, dueDate, …); `toApiContract`/`fromApiContract` and
+ * `toApiMilestone`/`fromApiMilestone` translate at the network boundary.
  */
 
-import { useState, Fragment } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import Toast   from '../components/ui/Toast';
 import Modal   from '../components/ui/Modal';
+import { API_BASE } from '../config.js';
 
-const STORAGE_KEY = 'kytos_contracts';
+const CONTRACTS_API = `${API_BASE}/api/v1/contracts`;
 
 const RISK_META = {
   on_track: { label: 'On Track', color: '#15803d', bg: '#dcfce7' },
@@ -36,18 +38,71 @@ function fmtSar(n) {
   const v = Number(n) || 0;
   return `SAR ${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
 }
-function uid() { return Math.random().toString(36).slice(2, 10); }
 
-function loadContracts() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore malformed local data */ }
-  return [];
+/* === API helpers === */
+
+function authHeaders() {
+  const token = localStorage.getItem('token');
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+}
+
+/** Turn a FastAPI error body (string or validation-error list) into one message. */
+function errMessage(data, fallback) {
+  const d = data?.detail;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) return d.map(e => `${(e.loc || []).slice(1).join(' › ')}: ${e.msg}`).join('; ');
+  return fallback;
+}
+
+/** fetch → parsed JSON, throwing an Error whose message is the API's `detail`. */
+async function api(url, options = {}) {
+  const res = await fetch(url, { ...options, headers: { ...authHeaders(), ...(options.headers || {}) } });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(errMessage(data, `Request failed (${res.status})`));
+  return data;
+}
+
+/** camelCase UI shape -> snake_case API payload, for POST/PUT /contracts. */
+function toApiContract(c) {
+  return {
+    file_ref: c.fileRef, customer: c.customer, po_number: c.poNumber || null,
+    po_value: Number(c.poValue) || 0, po_date: c.poDate || null, po_expiry_date: c.poExpiryDate || null,
+    title: c.title || null, contract_value: c.contractValue === '' || c.contractValue == null ? null : Number(c.contractValue),
+    risk: c.risk,
+  };
+}
+
+/** snake_case API contract (with nested milestones) -> camelCase UI shape. */
+function fromApiContract(c) {
+  return {
+    id: c.id, fileRef: c.file_ref, customer: c.customer, poNumber: c.po_number,
+    poValue: c.po_value, poDate: c.po_date, poExpiryDate: c.po_expiry_date,
+    title: c.title, contractValue: c.contract_value, risk: c.risk,
+    milestones: (c.milestones || []).map(fromApiMilestone),
+  };
+}
+
+function toApiMilestone(m) {
+  return {
+    name: m.name, pct: Number(m.pct) || 0, amount: Number(m.amount) || 0,
+    due_date: m.dueDate || null, status: m.status,
+    planned_date: m.plannedDate || null, achieved_date: m.achievedDate || null,
+    invoice_number: m.invoiceNumber || null, invoice_date: m.invoiceDate || null,
+    received_date: m.receivedDate || null,
+  };
+}
+
+function fromApiMilestone(m) {
+  return {
+    id: m.id, name: m.name, pct: m.pct, amount: m.amount, dueDate: m.due_date, status: m.status,
+    plannedDate: m.planned_date, achievedDate: m.achieved_date,
+    invoiceNumber: m.invoice_number, invoiceDate: m.invoice_date, receivedDate: m.received_date,
+  };
 }
 
 /* ── Contract (PO) create / edit modal ── */
-function ContractModal({ initial, onClose, onSave }) {
+function ContractModal({ initial, onClose, onSave, saving }) {
   const [form, setForm] = useState(initial || {
     fileRef: '', customer: '', poNumber: '', poValue: '', poDate: '', poExpiryDate: '',
     title: '', contractValue: '', risk: 'on_track',
@@ -55,7 +110,7 @@ function ContractModal({ initial, onClose, onSave }) {
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
   function save() {
     if (!form.fileRef.trim() || !form.customer.trim()) return;
-    onSave({ ...form, poValue: Number(form.poValue) || 0, contractValue: Number(form.contractValue) || 0 });
+    onSave({ ...form, poValue: Number(form.poValue) || 0, contractValue: form.contractValue === '' ? '' : Number(form.contractValue) });
   }
   return (
     <Modal title={initial ? 'Edit Contract' : 'New Contract'} onClose={onClose} width={640}>
@@ -82,15 +137,15 @@ function ContractModal({ initial, onClose, onSave }) {
           </select></div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
-        <button onClick={onClose} className="nrfq-btn-ghost">Cancel</button>
-        <button onClick={save} className="nrfq-btn-primary">{initial ? 'Save Changes' : 'Create Contract'}</button>
+        <button onClick={onClose} className="nrfq-btn-ghost" disabled={saving}>Cancel</button>
+        <button onClick={save} className="nrfq-btn-primary" disabled={saving}>{saving ? 'Saving…' : initial ? 'Save Changes' : 'Create Contract'}</button>
       </div>
     </Modal>
   );
 }
 
 /* ── Milestone create / edit modal ── */
-function MilestoneModal({ initial, onClose, onSave }) {
+function MilestoneModal({ initial, onClose, onSave, saving }) {
   const [form, setForm] = useState(initial || {
     name: '', pct: '', amount: '', dueDate: '', status: 'pending',
     plannedDate: '', achievedDate: '', invoiceNumber: '', invoiceDate: '', receivedDate: '',
@@ -127,15 +182,18 @@ function MilestoneModal({ initial, onClose, onSave }) {
           <input type="date" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }} value={form.receivedDate} onChange={e => set('receivedDate', e.target.value)} /></div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
-        <button onClick={onClose} className="nrfq-btn-ghost">Cancel</button>
-        <button onClick={save} className="nrfq-btn-primary">{initial ? 'Save Changes' : 'Add Milestone'}</button>
+        <button onClick={onClose} className="nrfq-btn-ghost" disabled={saving}>Cancel</button>
+        <button onClick={save} className="nrfq-btn-primary" disabled={saving}>{saving ? 'Saving…' : initial ? 'Save Changes' : 'Add Milestone'}</button>
       </div>
     </Modal>
   );
 }
 
 export default function Contracts({ goPage }) {
-  const [contracts, setContracts] = useState(() => loadContracts());
+  const [contracts, setContracts] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [saving, setSaving]       = useState(false);
   const [tab, setTab] = useState('payments'); // payments | cashflow | actionitems
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState(null); // contract id
@@ -145,39 +203,73 @@ export default function Contracts({ goPage }) {
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 3000); }
 
-  function persist(next) {
-    setContracts(next);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }
-
-  function saveContract(data) {
-    if (data.id) {
-      persist(contracts.map(c => c.id === data.id ? { ...c, ...data } : c));
-      showToast('Contract updated');
-    } else {
-      persist([{ ...data, id: uid(), milestones: [] }, ...contracts]);
-      showToast('Contract created');
+  const loadContracts = useCallback(async () => {
+    setLoading(true); setLoadError('');
+    try {
+      const data = await api(`${CONTRACTS_API}?limit=500`);
+      setContracts((data.items || []).map(fromApiContract));
+    } catch (e) {
+      setLoadError(e.message);
+    } finally {
+      setLoading(false);
     }
-    setContractModal(null);
+  }, []);
+
+  useEffect(() => { loadContracts(); }, [loadContracts]);
+
+  async function saveContract(data) {
+    setSaving(true);
+    try {
+      const saved = data.id
+        ? await api(`${CONTRACTS_API}/${data.id}`, { method: 'PUT', body: JSON.stringify(toApiContract(data)) })
+        : await api(CONTRACTS_API, { method: 'POST', body: JSON.stringify(toApiContract(data)) });
+      const c = fromApiContract(saved);
+      setContracts(cs => data.id ? cs.map(x => x.id === c.id ? c : x) : [c, ...cs]);
+      showToast(data.id ? 'Contract updated' : 'Contract created');
+      setContractModal(null);
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteContract(id) {
-    persist(contracts.filter(c => c.id !== id));
-    showToast('Contract removed');
+  async function deleteContract(id) {
+    if (!window.confirm('Delete this contract and all its milestones? This cannot be undone.')) return;
+    try {
+      await api(`${CONTRACTS_API}/${id}`, { method: 'DELETE' });
+      setContracts(cs => cs.filter(c => c.id !== id));
+      showToast('Contract removed');
+    } catch (e) {
+      showToast(e.message);
+    }
   }
 
-  function saveMilestone(contractId, data) {
-    persist(contracts.map(c => {
-      if (c.id !== contractId) return c;
-      if (data.id) return { ...c, milestones: c.milestones.map(m => m.id === data.id ? { ...m, ...data } : m) };
-      return { ...c, milestones: [...c.milestones, { ...data, id: uid() }] };
-    }));
-    showToast(data.id ? 'Milestone updated' : 'Milestone added');
-    setMsModal(null);
+  async function saveMilestone(contractId, data) {
+    setSaving(true);
+    try {
+      const updated = data.id
+        ? await api(`${CONTRACTS_API}/${contractId}/milestones/${data.id}`, { method: 'PUT', body: JSON.stringify(toApiMilestone(data)) })
+        : await api(`${CONTRACTS_API}/${contractId}/milestones`, { method: 'POST', body: JSON.stringify(toApiMilestone(data)) });
+      const c = fromApiContract(updated);
+      setContracts(cs => cs.map(x => x.id === c.id ? c : x));
+      showToast(data.id ? 'Milestone updated' : 'Milestone added');
+      setMsModal(null);
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function deleteMilestone(contractId, msId) {
-    persist(contracts.map(c => c.id === contractId ? { ...c, milestones: c.milestones.filter(m => m.id !== msId) } : c));
+  async function deleteMilestone(contractId, msId) {
+    try {
+      const updated = await api(`${CONTRACTS_API}/${contractId}/milestones/${msId}`, { method: 'DELETE' });
+      const c = fromApiContract(updated);
+      setContracts(cs => cs.map(x => x.id === c.id ? c : x));
+    } catch (e) {
+      showToast(e.message);
+    }
   }
 
   const filtered = contracts.filter(c =>
@@ -204,6 +296,7 @@ export default function Contracts({ goPage }) {
           initial={contractModal === 'new' ? null : contractModal}
           onClose={() => setContractModal(null)}
           onSave={saveContract}
+          saving={saving}
         />
       )}
       {msModal && (
@@ -211,6 +304,7 @@ export default function Contracts({ goPage }) {
           initial={msModal.milestone}
           onClose={() => setMsModal(null)}
           onSave={data => saveMilestone(msModal.contractId, data)}
+          saving={saving}
         />
       )}
 
@@ -220,7 +314,7 @@ export default function Contracts({ goPage }) {
         <div className="tb">
           <div className="tb-title tb-title-block">
             <div>Contract Payments</div>
-            <div className="tb-subtitle">Track PO milestones, invoicing, and collections — local data, not yet synced to the backend</div>
+            <div className="tb-subtitle">Track PO milestones, invoicing, and collections</div>
           </div>
           <div className="tb-right">
             <div className="tb-bell"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
@@ -277,7 +371,11 @@ export default function Contracts({ goPage }) {
                 </div>
               </div>
 
-              {filtered.length === 0 ? (
+              {loading ? (
+                <div className="prd-empty" style={{ padding: '40px 0' }}>Loading contracts…</div>
+              ) : loadError ? (
+                <div className="prd-empty" style={{ padding: '40px 0', color: '#b91c1c' }}>{loadError}</div>
+              ) : filtered.length === 0 ? (
                 <div className="prd-empty" style={{ padding: '40px 0' }}>
                   {contracts.length === 0 ? 'No contracts yet — click "New Contract" to add one.' : 'No contracts match your search.'}
                 </div>
